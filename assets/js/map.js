@@ -356,8 +356,13 @@
 		tbody.innerHTML = html;
 	}
 
-	/** Terbang ke poligon desa lalu buka popup-nya. */
-	function terbangKeDesa(kode, el) {
+	/**
+	 * Tunjukkan posisi desa: geser peta ke pusat poligon lalu buka popup.
+	 *
+	 * Tingkat zoom sengaja tidak diubah — peta tetap pada tingkat semula,
+	 * hanya tampilan yang bergeser ke desa yang diklik.
+	 */
+	function tunjukkanDesa(kode, el) {
 		var ly = kodePeta[kode];
 		if (!map || !ly) return;
 
@@ -375,7 +380,8 @@
 			}
 		}
 
-		map.fitBounds(ly.getBounds(), { padding: [40, 40], maxZoom: 15 });
+		/* panTo menjaga tingkat zoom; fitBounds justru mengubahnya. */
+		map.panTo(ly.getBounds().getCenter());
 		window.setTimeout(function () { ly.openPopup(); }, 420);
 	}
 
@@ -558,7 +564,7 @@
 			badan.addEventListener('click', function (e) {
 				var tr = e.target && e.target.closest ? e.target.closest('tr[data-kode]') : null;
 				if (!tr) return;
-				terbangKeDesa(tr.getAttribute('data-kode'), tr);
+				tunjukkanDesa(tr.getAttribute('data-kode'), tr);
 			});
 		}
 	}

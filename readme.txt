@@ -94,7 +94,8 @@ tersimpan di tabel dan ikut terekspor ke CSV.
   kolom pertama menempel ke kiri dan kepala menempel ke atas saat digulir.
 * Kepala kolom jenis dibuat dari seluruh jenis pada data, sehingga susunan
   kolom tetap walau saringan menyisakan satu jenis.
-* Klik baris tabel terbang ke poligon desa dan membuka popup-nya.
+* Klik baris tabel menggeser peta ke desa tersebut tanpa mengubah tingkat
+  zoom, lalu membuka popup-nya.
 * Perbaikan format tanggal impor Excel: serial Excel, teks lokal Indonesia,
   dan teks Inggris kini menghasilkan tanggal yang sama.
 * Pratinjau impor memberi tahu bila nama desa/kecamatan di Excel tidak cocok
