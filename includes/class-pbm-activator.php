@@ -15,6 +15,30 @@ class PBM_Activator {
 		self::create_tables();
 		self::import_desa();
 		self::sesuaikan_kolom();
+		self::tandai_sumber();
+		update_option( 'pbm_db_version', PBM_VERSION );
+	}
+
+	/**
+	 * Sinkronkan master desa bila versi plugin berubah.
+	 *
+	 * Aktivasi hanya terjadi saat plugin diaktifkan, sedangkan perubahan pada
+	 * GeoJSON (desa baru, perbaikan nama/kecamatan) datang bersama pembaruan
+	 * kode. Tanpa langkah ini master desa tetap memakai data lama sampai
+	 * plugin diaktifkan ulang.
+	 */
+	public static function maybe_sync() {
+		if ( get_option( 'pbm_db_version' ) === PBM_VERSION ) {
+			return;
+		}
+		/* Hanya di admin/CLI agar permintaan frontend tidak menaruh upgrade.php. */
+		if ( ! is_admin() && ! ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+			return;
+		}
+		self::create_tables();
+		self::import_desa();
+		self::sesuaikan_kolom();
+		self::tandai_sumber();
 		update_option( 'pbm_db_version', PBM_VERSION );
 	}
 
@@ -44,9 +68,11 @@ class PBM_Activator {
 				kode char(12) NOT NULL,
 				nama varchar(120) NOT NULL,
 				kecamatan varchar(120) NOT NULL,
+				sumber varchar(10) NOT NULL DEFAULT 'peta',
 				PRIMARY KEY  (id),
 				UNIQUE KEY kode (kode),
-				KEY kecamatan (kecamatan)
+				KEY kecamatan (kecamatan),
+				KEY sumber (sumber)
 			) $charset;"
 		);
 
@@ -97,7 +123,15 @@ class PBM_Activator {
 		return array( 'drop' => $drop, 'add' => $add );
 	}
 
-	/** Impor master desa dari GeoJSON bawaan plugin. */
+	/**
+	 * Impor master desa dari GeoJSON bawaan plugin.
+	 *
+	 * Desa baru ditambahkan; nama/kecamatan pada desa yang sudah ada ikut
+	 * disesuaikan dengan isi GeoJSON terbaru, supaya pencocokan nama desa
+	 * selalu mengacu ke peta yang dipakai untuk menggambar polygon.
+	 *
+	 * @return int Jumlah baris yang ditambah atau diperbarui.
+	 */
 	public static function import_desa() {
 		global $wpdb;
 		$table = self::tabel_desa();
@@ -112,25 +146,87 @@ class PBM_Activator {
 			return 0;
 		}
 
-		$ada = array_flip( (array) $wpdb->get_col( "SELECT kode FROM $table" ) );
-		$n   = 0;
+		$ada = array();
+		foreach ( (array) $wpdb->get_results( "SELECT id, kode, nama, kecamatan FROM $table" ) as $r ) {
+			$ada[ $r->kode ] = $r;
+		}
+
+		$n         = 0;
+		$diperbarui = 0;
 		foreach ( $json['features'] as $f ) {
 			$p    = $f['properties'];
 			$kode = sanitize_text_field( $p['kode'] ?? '' );
-			if ( '' === $kode || isset( $ada[ $kode ] ) ) {
+			if ( '' === $kode ) {
 				continue;
 			}
-			$wpdb->insert(
-				$table,
-				array(
-					'kode'      => $kode,
-					'nama'      => sanitize_text_field( $p['nama'] ?? '' ),
-					'kecamatan' => sanitize_text_field( $p['kecamatan'] ?? '' ),
-				),
-				array( '%s', '%s', '%s' )
-			);
-			$n++;
+			$nama = sanitize_text_field( $p['nama'] ?? '' );
+			$kec  = sanitize_text_field( $p['kecamatan'] ?? '' );
+
+			if ( ! isset( $ada[ $kode ] ) ) {
+				$wpdb->insert(
+					$table,
+					array(
+						'kode'      => $kode,
+						'nama'      => $nama,
+						'kecamatan' => $kec,
+						'sumber'    => PBM_Desa::SUMBER_PETA,
+					),
+					array( '%s', '%s', '%s', '%s' )
+				);
+				$n++;
+				continue;
+			}
+
+			/* Perbarui nama/kecamatan bila berubah di peta. */
+			$baris = $ada[ $kode ];
+			if ( $baris->nama !== $nama || $baris->kecamatan !== $kec ) {
+				$wpdb->update(
+					$table,
+					array(
+						'nama'      => $nama,
+						'kecamatan' => $kec,
+						'sumber'    => PBM_Desa::SUMBER_PETA,
+					),
+					array( 'kode' => $kode ),
+					array( '%s', '%s', '%s' ),
+					array( '%s' )
+				);
+				$diperbarui++;
+			}
 		}
+		return $n + $diperbarui;
+	}
+
+	/**
+	 * Tandai sumber baris master desa yang belum punya penanda.
+	 *
+	 * Kolom `sumber` ditambahkan bersama halaman Master Desa. Baris lama
+	 * ditandai dari bentuk kodenya: kode numerik berasal dari GeoJSON peta,
+	 * sedangkan kode berawalan huruf adalah rekaman desa di luar polygon
+	 * yang tercatat oleh impor sebelumnya. Kedua jenis baris ada sejak
+	 * lama, jadi penandaan ini cukup dijalankan sekali setiap kali kolom
+	 * baru muncul.
+	 *
+	 * @return int Jumlah baris yang ditandai ulang.
+	 */
+	public static function tandai_sumber() {
+		global $wpdb;
+		$t = self::tabel_desa();
+
+		if ( ! $wpdb->get_var( "SHOW COLUMNS FROM $t LIKE 'sumber'" ) ) {
+			return 0;
+		}
+
+		/* Kode non-numerik = hasil impor (bukan bagian peta). */
+		$n = (int) $wpdb->query(
+			"UPDATE $t SET sumber = '" . PBM_Desa::SUMBER_IMPOR . "'"
+			. " WHERE kode NOT REGEXP '^[0-9]+$' AND sumber = '" . PBM_Desa::SUMBER_PETA . "'"
+		);
+		/* Kode numerik = bawaan GeoJSON. */
+		$n += (int) $wpdb->query(
+			"UPDATE $t SET sumber = '" . PBM_Desa::SUMBER_PETA . "'"
+			. " WHERE kode REGEXP '^[0-9]+$' AND sumber = '" . PBM_Desa::SUMBER_IMPOR . "'"
+		);
 		return $n;
 	}
 }

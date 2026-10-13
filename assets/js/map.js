@@ -16,8 +16,27 @@
 	var BIN = [1, 5, 20, 100];
 	var WARNA = ['#f7f7f7', '#fee5d9', '#fcae91', '#fb6a4a', '#a50f15'];
 
-	var state = { dari: W.dari || '', sampai: W.sampai || '', bencana: W.bencana || '' };
+	var state = {
+		dari: W.dari || '',
+		sampai: W.sampai || '',
+		bencana: W.bencana || '',
+		kecamatan: W.kecamatan || ''
+	};
+
+	/* Pengurutan tabel bencana per desa. Bawaan: jumlah total kejadian
+	 * terbanyak dulu, supaya desa paling terdampak langsung terlihat. */
+	var urut = { kolom: 'total', arah: 'turun' };
+
 	var map, desaLayer, kecLayer, rekap = {}, rekapJenis = {}, legend;
+
+	/* Master desa (sekali muat) dan indeks poligon per kode — dipakai
+	 * tabel bencana per desa. */
+	var daftarDesa = null;
+	var kodePeta = {};
+	var daftarGagal = false;
+
+	/* Warna batang grafik jenis bencana. */
+	var WARNA_BAR = ['#a50f15', '#d0452c', '#e8813a', '#efb145', '#7fa482', '#4f8fa8', '#5f73a8', '#98a2b3'];
 
 	function warna(n) {
 		if (!n) return WARNA[0];
@@ -83,7 +102,6 @@
 
 	function hitungStats() {
 		var el = document.getElementById('pbm-stats');
-		if (!el) return;
 
 		var t = { kejadian: 0, desa: 0, kecamatan: {} };
 		Object.keys(rekap).forEach(function (k) {
@@ -93,33 +111,272 @@
 			if (r.kecamatan) t.kecamatan[r.kecamatan] = 1;
 		});
 
-		el.innerHTML =
-			kartu(t.kejadian, i18n.kejadian) +
-			kartu(t.desa, i18n.desaTerdampak) +
-			kartu(Object.keys(t.kecamatan).length, i18n.kecamatan);
-
-		/* Akumulasi kabupaten per jenis bencana */
-		var perJenis = {};
-		Object.keys(rekapJenis).forEach(function (kode) {
-			var j = rekapJenis[kode] || {};
-			Object.keys(j).forEach(function (key) { perJenis[key] = (perJenis[key] || 0) + j[key]; });
-		});
-		var urut = Object.keys(perJenis).sort(function (a, b) { return perJenis[b] - perJenis[a]; });
-
-		var lama = el.parentNode.querySelector('.pbm-jenis-box');
-		if (lama) lama.parentNode.removeChild(lama);
-		if (urut.length) {
-			var html = '<div class="pbm-jenis-box"><b>' + (i18n.jenis || 'Kejadian per jenis bencana') + '</b><ul>';
-			urut.forEach(function (key) {
-				html += '<li><span>' + escapeHtml(key) + '</span><b>' + angka(perJenis[key]) + '</b></li>';
-			});
-			html += '</ul></div>';
-			el.insertAdjacentHTML('afterend', html);
+		if (el) {
+			el.innerHTML =
+				kartu(t.kejadian, i18n.kejadian) +
+				kartu(t.desa, i18n.desaTerdampak) +
+				kartu(Object.keys(t.kecamatan).length, i18n.kecamatan);
 		}
+
+		isiJenis();
+		isiTabel();
 	}
 
 	function kartu(n, label) {
 		return '<div class="pbm-stat"><b>' + angka(n) + '</b><span>' + label + '</span></div>';
+	}
+
+	/* ------------------------------------------ kejadian per jenis bencana */
+
+	/** Akumulasi seluruh desa jadi satu daftar: nama jenis => jumlah. */
+	function jumlahPerJenis() {
+		var per = {};
+		Object.keys(rekapJenis).forEach(function (kode) {
+			var j = rekapJenis[kode] || {};
+			Object.keys(j).forEach(function (k) { per[k] = (per[k] || 0) + j[k]; });
+		});
+		return per;
+	}
+
+	function isiJenis() {
+		var per = jumlahPerJenis();
+		var urut = Object.keys(per).sort(function (a, b) { return per[b] - per[a]; });
+		var total = 0;
+		urut.forEach(function (k) { total += per[k]; });
+		var maks = urut.length ? per[urut[0]] : 1;
+
+		var isi = '<h3 class="pbm-panel-t">' + escapeHtml(i18n.jenis || 'Kejadian per jenis bencana') + '</h3>';
+
+		if (!urut.length) {
+			isi += '<p class="pbm-kosong">' + escapeHtml(i18n.belumAda || 'Belum ada laporan.') + '</p>';
+		} else {
+			isi += '<ul class="pbm-bars">';
+			urut.forEach(function (k, i) {
+				var n = per[k];
+				var pct = total ? Math.round(n / total * 100) : 0;
+				isi += '<li>'
+					+ '<span class="pbm-bar-nama" title="' + escapeHtml(k) + '">' + escapeHtml(k) + '</span>'
+					+ '<span class="pbm-bar-jalur"><span class="pbm-bar-isi" style="width:'
+					+ Math.max(2, n / maks * 100).toFixed(1) + '%;background:'
+					+ WARNA_BAR[i % WARNA_BAR.length] + '"></span></span>'
+					+ '<b class="pbm-bar-n">' + angka(n) + '</b>'
+					+ '<em class="pbm-bar-pct">' + pct + '%</em>'
+					+ '</li>';
+			});
+			isi += '</ul>';
+			isi += '<p class="pbm-bar-total"><span>' + escapeHtml(i18n.total || 'Total kejadian')
+				+ '</span><b>' + angka(total) + '</b></p>';
+		}
+
+		var box = document.getElementById('pbm-panel-jenis');
+		if (box) { box.innerHTML = isi; return; }
+
+		/* Halaman lama tanpa wadah khusus: sisipkan setelah kartu statistik.
+		 * Halaman admin tidak punya #pbm-stats, jadi kartunya tetap milik
+		 * server dan tidak disentuh di sini. */
+		var s = document.getElementById('pbm-stats');
+		if (!s || !s.parentNode) return;
+		var lama = s.parentNode.querySelector('.pbm-jenis-box');
+		if (lama) lama.parentNode.removeChild(lama);
+		s.insertAdjacentHTML('afterend', '<div class="pbm-jenis-box">' + isi + '</div>');
+	}
+
+	/* ------------------------------------------- tabel bencana per desa */
+
+	/** Muat master desa sekali jalan; sengaja lepas dari rantai peta. */
+	function muatDaftarDesa() {
+		api('desa')
+			.then(function (d) { daftarDesa = Array.isArray(d) ? d : []; })
+			.catch(function () { daftarDesa = []; daftarGagal = true; })
+			.then(isiTabel);
+	}
+
+	/** Susunan kolom: No, Nama Desa, Nama Kecamatan, tiap jenis, Jumlah Total. */
+	function kolomTabel() {
+		var kolom = [
+			{ k: 'no', t: 'angka', s: 'teks', l: i18n.labelNo || 'No' },
+			{ k: 'nama', t: 'teks', l: i18n.labelDesa || 'Nama Desa' },
+			{ k: 'kecamatan', t: 'teks', l: i18n.labelKec || 'Nama Kecamatan' }
+		];
+
+		/* Kepala kolom datang dari server (seluruh jenis pada data), jadi
+		 * susunan kolom tetap walau saringan menyisakan satu jenis saja. */
+		var jenis = (W.kolomJenis && W.kolomJenis.length) ? W.kolomJenis.slice() : [];
+		if (!jenis.length) {
+			jenis = [];
+			Object.keys(rekapJenis).forEach(function (kode) {
+				Object.keys(rekapJenis[kode] || {}).forEach(function (n) {
+					if (jenis.indexOf(n) < 0) jenis.push(n);
+				});
+			});
+		}
+		jenis.forEach(function (nama, i) {
+			kolom.push({ k: 'j' + i, t: 'angka', l: nama, jenis: nama });
+		});
+
+		kolom.push({ k: 'total', t: 'angka', l: i18n.labelTotal || 'Jumlah Total' });
+		return kolom;
+	}
+
+	/** Gambar kepala kolom beserta tanda urutnya. */
+	function kepalaTabel() {
+		var tr = document.getElementById('pbm-tabel-kepala');
+		if (!tr) return;
+
+		var html = '';
+		kolomTabel().forEach(function (c) {
+			var aktif = urut.kolom === c.k;
+			var arah = aktif ? urut.arah : '';
+			/* Arah berikutnya saat kolom diklik: kolom angka dibuka dari
+			 * yang terbesar, kolom teks dari huruf terkecil. */
+			var berikut = aktif ? (urut.arah === 'naik' ? 'turun' : 'naik')
+				: (c.t === 'angka' ? 'turun' : 'naik');
+
+			html += '<th scope="col" class="pbm-th pbm-th-' + c.t + (aktif ? ' sorted ' + arah : '')
+				+ '" aria-sort="' + (aktif ? (arah === 'naik' ? 'ascending' : 'descending') : 'none') + '">'
+				+ '<button type="button" class="pbm-th-btn" data-kolom="' + escapeHtml(c.k)
+				+ '" data-arah="' + berikut + '"><span>' + escapeHtml(c.l)
+				+ '</span><span class="pbm-sort-ind" aria-hidden="true"></span></button></th>';
+		});
+		tr.innerHTML = html;
+	}
+
+	/** Isi badan tabel: saring master desa, isi hitungan, urutkan, render. */
+	function isiTabel() {
+		var tbody = document.getElementById('pbm-tabel-badan');
+		var counter = document.getElementById('pbm-tabel-jumlah');
+		if (!tbody) return;
+
+		/* Kepala digambar ulang tiap kali: bila jenis kolom diturunkan dari
+		 * data (bukan dari server), ia baru muncul setelah rekap turun. */
+		kepalaTabel();
+
+		var kolom = kolomTabel();
+		var inp = document.getElementById('pbm-cari-desa');
+		var q = ((inp && inp.value) || '').trim().toLowerCase();
+
+		var pesan = '';
+		if (!daftarDesa) pesan = i18n.memuatTabel || 'Memuat tabel…';
+		else if (daftarGagal) pesan = i18n.gagal || 'Gagal memuat data.';
+
+		if (pesan) {
+			tbody.innerHTML = '<tr><td class="pbm-tabel-kosong" colspan="' + kolom.length + '">'
+				+ escapeHtml(pesan) + '</td></tr>';
+			if (counter) counter.textContent = '';
+			return;
+		}
+
+		var baris = [];
+		var totalMaster = 0;
+		daftarDesa.forEach(function (d) {
+			var sama = !state.kecamatan || d.kecamatan === state.kecamatan;
+			if (sama) totalMaster++;
+			if (!sama) return;
+
+			var nama = d.nama || '';
+			var cocok = !q
+				|| nama.toLowerCase().indexOf(q) >= 0
+				|| String(d.kecamatan || '').toLowerCase().indexOf(q) >= 0
+				|| String(d.kode || '').indexOf(q) >= 0;
+			if (!cocok) return;
+
+			baris.push({
+				kode: d.kode,
+				nama: nama,
+				kecamatan: d.kecamatan || '-',
+				per: rekapJenis[d.kode] || {},
+				total: rekap[d.kode] ? rekap[d.kode].kejadian : 0,
+				/* Desa impor tanpa poligon tidak bisa dipetakan. */
+				peta: !!kodePeta[d.kode]
+			});
+		});
+
+		if (counter) {
+			counter.textContent = '(' + angka(baris.length)
+				+ (baris.length === totalMaster ? '' : ' / ' + angka(totalMaster)) + ')';
+		}
+
+		if (!baris.length) {
+			tbody.innerHTML = '<tr><td class="pbm-tabel-kosong" colspan="' + kolom.length + '">'
+				+ escapeHtml(i18n.tabelKosong || 'Tidak ada desa yang cocok.') + '</td></tr>';
+			return;
+		}
+
+		var col = null;
+		for (var i = 0; i < kolom.length; i++) if (kolom[i].k === urut.kolom) col = kolom[i];
+		if (!col) col = { k: 'kecamatan', t: 'teks' };
+
+		/** Nilai sebuah kolom untuk sebuah baris. */
+		function nilai(r, c) {
+			if (c.k === 'no') return r.kode;              /* urutan fisik master */
+			if (c.k === 'nama') return r.nama;
+			if (c.k === 'kecamatan') return r.kecamatan;
+			if (c.k === 'total') return r.total;
+			return r.per[c.jenis] || 0;
+		}
+
+		baris.sort(function (a, b) {
+			var tipe = col.s || col.t;
+			var h;
+			if (tipe === 'angka') h = nilai(a, col) - nilai(b, col);
+			else h = String(nilai(a, col)).localeCompare(String(nilai(b, col)), 'id');
+			if (urut.arah === 'turun') h = -h;
+			/* Pengikat: kecamatan lalu nama, selalu naik — supaya baris yang
+			 * nilainya sama tetap terbaca berurutan apa pun arah urutnya. */
+			if (h === 0) {
+				h = a.kecamatan.localeCompare(b.kecamatan, 'id')
+					|| a.nama.localeCompare(b.nama, 'id');
+			}
+			return h;
+		});
+
+		var html = '';
+		baris.forEach(function (r, idx) {
+			html += '<tr' + (r.peta ? ' class="pbm-baris" data-kode="' + escapeHtml(r.kode) + '"' : '') + '>';
+			kolom.forEach(function (c, ci) {
+				var cls = 'pbm-td';
+				var isi;
+
+				if (c.k === 'nama' || c.k === 'kecamatan') {
+					isi = escapeHtml(c.k === 'nama' ? r.nama : r.kecamatan);
+					cls += ' pbm-td-teks';
+				} else {
+					var v = c.k === 'no' ? idx + 1
+						: (c.k === 'total' ? r.total : (r.per[c.jenis] || 0));
+					isi = angka(v);
+					cls += ' pbm-td-angka';
+					if (c.k !== 'no' && !v) cls += ' nol';
+				}
+
+				if (ci < 3) cls += ' pbm-td-lekat';
+				html += '<td class="' + cls + '">' + isi + '</td>';
+			});
+			html += '</tr>';
+		});
+		tbody.innerHTML = html;
+	}
+
+	/** Terbang ke poligon desa lalu buka popup-nya. */
+	function terbangKeDesa(kode, el) {
+		var ly = kodePeta[kode];
+		if (!map || !ly) return;
+
+		Array.prototype.forEach.call(document.querySelectorAll('.pbm-frontend .is-aktif'), function (b) {
+			b.classList.remove('is-aktif');
+		});
+		if (el) el.classList.add('is-aktif');
+
+		/* Peta mungkin berada di luar layar (tabel ada di bawahnya). */
+		var p = document.getElementById('pbm-map');
+		if (p) {
+			var r = p.getBoundingClientRect();
+			if (r.bottom < 0 || r.top > (window.innerHeight || 0)) {
+				p.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			}
+		}
+
+		map.fitBounds(ly.getBounds(), { padding: [40, 40], maxZoom: 15 });
+		window.setTimeout(function () { ly.openPopup(); }, 420);
 	}
 
 	/* -------------------------------------------------------- legenda */
@@ -145,7 +402,12 @@
 	/* ----------------------------------------------------------- data */
 
 	function muat() {
-		return api('rekap', { dari: state.dari, sampai: state.sampai, bencana: state.bencana })
+		return api('rekap', {
+			dari: state.dari,
+			sampai: state.sampai,
+			bencana: state.bencana,
+			kecamatan: state.kecamatan
+		})
 			.then(function (d) {
 				rekap = (d && d.desa) || {};
 				rekapJenis = (d && d.jenis) || {};
@@ -208,6 +470,14 @@
 				}
 			}).addTo(map);
 
+			/* Peta kode -> poligon, supaya baris daftar desa bisa terbang
+			 * ke desa yang diklik. */
+			desaLayer.eachLayer(function (ly) {
+				var p = ly.feature && ly.feature.properties;
+				if (p && p.kode) kodePeta[p.kode] = ly;
+			});
+			isiTabel();   /* gambar ulang: sekarang baris sudah bisa diklik */
+
 			kecLayer = L.geoJSON(arr[1], {
 				interactive: false,
 				style: { color: '#33475b', weight: 2, fill: false, dashArray: '4 3' }
@@ -241,6 +511,7 @@
 				state.dari = (document.getElementById('pbm-dari') || {}).value || '';
 				state.sampai = (document.getElementById('pbm-sampai') || {}).value || '';
 				state.bencana = (document.getElementById('pbm-jenis') || {}).value || '';
+				state.kecamatan = (document.getElementById('pbm-kecamatan') || {}).value || '';
 				muat();
 			});
 		}
@@ -252,16 +523,58 @@
 				});
 				var j = document.getElementById('pbm-jenis');
 				if (j) j.value = '';
-				state = { dari: '', sampai: '', bencana: '' };
+				var kc = document.getElementById('pbm-kecamatan');
+				if (kc) kc.value = '';
+				state = { dari: '', sampai: '', bencana: '', kecamatan: '' };
 				muat();
 			});
 		}
 	}
 
-	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', function () { initMap(); pasangFilter(); });
-	} else {
+	/* ------------------------------------------------ tabel bencana */
+
+	function pasangTabel() {
+		var cari = document.getElementById('pbm-cari-desa');
+		if (cari) {
+			cari.addEventListener('input', isiTabel);
+			cari.addEventListener('search', isiTabel); /* tombol silang di sebagian peramban */
+		}
+
+		/* Kepala diganti lewat innerHTML, jadi sambungannya dipasang pada
+		 * <tr>-nya sendiri yang tidak ikut diganti. */
+		var kepala = document.getElementById('pbm-tabel-kepala');
+		if (kepala) {
+			kepala.addEventListener('click', function (e) {
+				var btn = e.target && e.target.closest ? e.target.closest('.pbm-th-btn') : null;
+				if (!btn) return;
+				urut.kolom = btn.getAttribute('data-kolom');
+				urut.arah = btn.getAttribute('data-arah');
+				isiTabel();
+			});
+		}
+
+		var badan = document.getElementById('pbm-tabel-badan');
+		if (badan) {
+			badan.addEventListener('click', function (e) {
+				var tr = e.target && e.target.closest ? e.target.closest('tr[data-kode]') : null;
+				if (!tr) return;
+				terbangKeDesa(tr.getAttribute('data-kode'), tr);
+			});
+		}
+	}
+
+	function mulai() {
+		kepalaTabel();   /* kepala kolom datang dari server, bisa digambar awal */
+		isiTabel();      /* tampilkan "Memuat…" sebelum data turun */
+		muatDaftarDesa();
 		initMap();
 		pasangFilter();
+		pasangTabel();
+	}
+
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', mulai);
+	} else {
+		mulai();
 	}
 })();

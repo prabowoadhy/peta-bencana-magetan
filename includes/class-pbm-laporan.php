@@ -147,14 +147,97 @@ class PBM_Laporan {
 		return $args ? $wpdb->prepare( $sql, $args ) : $sql;
 	}
 
-	/** @return object[] */
-	public static function daftar( array $f = array(), $limit = 50, $offset = 0 ) {
+	/**
+	 * Kolom koordinat — titik adalah pemisah desimal.
+	 * @return string[]
+	 */
+	private static function kolom_desimal() {
+		return array( 'lat', 'lon' );
+	}
+
+	/**
+	 * Kolom hitungan dan nilai rupiah.
+	 *
+	 * Disimpan sebagai teks mengikuti isi Excel, sehingga perlu dijadikan
+	 * angka sebelum diurutkan — kalau tidak, 9000 mendahului 12000000.
+	 * @return string[]
+	 */
+	private static function kolom_bilangan() {
+		return array(
+			'dampak_manusia', 'dampak_hewan', 'dampak_rumah', 'dampak_harta',
+			'dampak_jalan', 'dampak_fasilitas', 'dampak_jembatan', 'nilai_kerusakan',
+		);
+	}
+
+	/**
+	 * Susun klausa ORDER BY dari parameter kolom — hanya lewat whitelist.
+	 *
+	 * Nama kolom dari URL tidak pernah masuk SQL apa adanya: hanya kolom
+	 * milik skema Excel dan kolom internal tabel yang boleh dipakai, lalu
+	 * dibungkus backtick. Tanpa langkah ini parameter `urut` akan menjadi
+	 * celah injeksi SQL.
+	 *
+	 * @param string $kolom Kolom yang diminta.
+	 * @param string $arah  'naik' | 'turun'.
+	 * @return string Klausa ORDER BY, atau '' bila kolom tidak diizinkan.
+	 */
+	private static function urut_sql( $kolom, $arah ) {
+		if ( '' === $kolom ) {
+			return '';
+		}
+		$diizinkan = array_merge( array( 'id', 'kode_desa', 'user_id', 'created_at' ), PBM_Skema::nama_kolom() );
+		if ( ! in_array( $kolom, $diizinkan, true ) ) {
+			return '';
+		}
+		$d = ( 'turun' === $arah ) ? 'DESC' : 'ASC';
+
+		/* Kolom tanggal: MySQL menaruh NULL sebagai nilai terendah, jadi ASC
+		 * menempatkannya di paling atas. Disandingkan `IS NULL` agar baris
+		 * tanpa tanggal selalu di belakang, di kedua arah. */
+		if ( in_array( $kolom, array( 'waktu_laporan', 'waktu_kejadian' ), true ) ) {
+			return "ORDER BY `$kolom` IS NULL, `$kolom` $d, id DESC";
+		}
+
+		if ( in_array( $kolom, self::kolom_desimal(), true ) ) {
+			return "ORDER BY `$kolom` REGEXP '^[+-]?[0-9.]+$' DESC, "
+				. "CAST(`$kolom` AS DECIMAL(20,10)) $d, `$kolom` $d, id DESC";
+		}
+
+		if ( in_array( $kolom, self::kolom_bilangan(), true ) ) {
+			/* Pemisah ribuan dibuang dulu, baru dijadikan angka. Nilai yang
+			 * tidak berbentuk angka dikelompokkan terpisah sehingga tetap
+			 * terbaca, bukan semuanya berubah jadi nol. */
+			$teks  = "`$kolom` REGEXP '^[[:space:]]*[+-]?[0-9][0-9.,[:space:]]*$'";
+			$baku  = 'TRIM(`' . $kolom . '`)';
+			$angka = "CAST(REPLACE(REPLACE(REPLACE($baku, '.', ''), ',', ''), ' ', '') AS DECIMAL(65,4))";
+			return "ORDER BY IF($teks, 0, 1) ASC, $angka $d, `$kolom` $d, id DESC";
+		}
+
+		return "ORDER BY `$kolom` $d, id DESC";
+	}
+
+	/**
+	 * Daftar laporan sesuai filter, kini bisa diurutkan.
+	 *
+	 * @param array  $f     Filter.
+	 * @param int    $limit Jumlah baris.
+	 * @param int    $offset Offset.
+	 * @param string $urut  Kolom pengurutan (disaring ulang oleh urut_sql()).
+	 * @param string $arah  'naik' | 'turun'.
+	 * @return object[]
+	 */
+	public static function daftar( array $f = array(), $limit = 50, $offset = 0, $urut = '', $arah = '' ) {
 		global $wpdb;
 		$t = self::table();
 		$d = self::where( $f );
-		return $wpdb->get_results(
-			"SELECT * FROM $t $d ORDER BY waktu_laporan DESC, id DESC LIMIT $limit OFFSET $offset"
-		);
+		$o = self::urut_sql( $urut, $arah );
+		if ( '' === $o ) {
+			/* Tanpa perintah sortir yang sah, kembali ke urutan lama. */
+			$o = 'ORDER BY waktu_laporan DESC, id DESC';
+		}
+		$limit  = max( 1, (int) $limit );
+		$offset = max( 0, (int) $offset );
+		return $wpdb->get_results( "SELECT * FROM $t $d $o LIMIT $limit OFFSET $offset" );
 	}
 
 	public static function hitung( array $f = array() ) {

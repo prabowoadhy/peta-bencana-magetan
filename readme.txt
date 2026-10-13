@@ -2,9 +2,9 @@
 Contributors: kominfo
 Tags: peta, bencana, leaflet, magetan, gis, import excel
 Requires at least: 6.0
-Tested up to: 6.7
+Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.0.0
+Stable tag: 2.1.0
 License: GPLv2 or later
 
 Peta bencana per desa Kabupaten Magetan. Tabel data mengikuti kolom berkas Excel register bencana.
@@ -28,6 +28,10 @@ Fitur:
 * Choropleth per desa: 0, 1-4, 5-19, 20-99, >=100 kejadian.
 * Popup desa: total kejadian + AKUMULASI PER JENIS bencana.
 * Kotak ringkasan "Kejadian per jenis bencana" untuk seluruh kabupaten.
+* Tabel "Bencana per Desa" di halaman publik: satu baris per desa, satu
+  kolom per jenis bencana + Jumlah Total. Saringan rentang tanggal dan
+  kecamatan, kepala kolom bisa diurutkan (bawaan: Jumlah Total terbesar),
+  tiga kolom pertama menempel waktu digulir mendatar.
 * Impor massal .xlsx: kolom dideteksi otomatis (termasuk header bertingkat),
   koordinat dirapikan, desa dicocokkan ke peta, duplikat dilewati.
 * Tombol hapus semua data lama untuk mengganti total dengan Excel terbaru.
@@ -77,3 +81,29 @@ Tidak masalah, kolom dideteksi berdasarkan nama header, bukan posisinya.
 = Kenapa koordinat tidak muncul sebagai titik? =
 Sesuai desain, pengelompokan dilakukan per desa/kecamatan. Koordinat tetap
 tersimpan di tabel dan ikut terekspor ke CSV.
+
+== Changelog ==
+
+= 2.1.0 =
+
+* Tabel "Bencana per Desa" di halaman publik: No, Nama Desa, Nama Kecamatan,
+  satu kolom per jenis bencana, Jumlah Total.
+* Saringan kecamatan ditambahkan ke bilah filter; berlaku untuk peta, kartu
+  ringkasan, grafik jenis, dan tabel sekaligus.
+* Kepala kolom tabel bisa diurutkan (bawaan Jumlah Total terbesar), tiga
+  kolom pertama menempel ke kiri dan kepala menempel ke atas saat digulir.
+* Kepala kolom jenis dibuat dari seluruh jenis pada data, sehingga susunan
+  kolom tetap walau saringan menyisakan satu jenis.
+* Klik baris tabel terbang ke poligon desa dan membuka popup-nya.
+* Perbaikan format tanggal impor Excel: serial Excel, teks lokal Indonesia,
+  dan teks Inggris kini menghasilkan tanggal yang sama.
+* Pratinjau impor memberi tahu bila nama desa/kecamatan di Excel tidak cocok
+  dengan master desa, tanpa menulis baris apa pun.
+* Halaman "Master Desa": daftar seluruh desa, penanda kesalahan ejaan, dan
+  tabel yang bisa dicari; desa bawaan peta tidak dapat dihapus.
+* Kolom "sumber" (peta/impor) pada tabel master desa.
+* Master desa otomatis disinkronkan saat versi plugin berubah.
+
+= 2.0.0 =
+
+* Rilis awal: peta choropleth per desa, impor Excel, REST API, halaman admin.

@@ -133,15 +133,28 @@ class PBM_Xlsx {
 		return array( (int) $m[2] - 1, $col - 1 );
 	}
 
-	/** Serial tanggal Excel -> Y-m-d. */
-	private static function serial_ke_tanggal( $n ) {
+	/**
+	 * Serial tanggal Excel -> Y-m-d.
+	 *
+	 * Epoch Excel: serial 25569 = 1970-01-01. Konstanta 25569 itu SUDAH
+	 * mengandung koreksi bug tahun kabisat 1900, jadi serial tidak boleh
+	 * dikurangi lagi sebelum dikurangi epoch — kesalahan lama membuat semua
+	 * tanggal mundur 1 hari.
+	 *
+	 * Serial <= 59 (1900-01-01 s/d 1900-02-28) memakai epoch 25568 karena
+	 * berada sebelum titik gabung sistem Excel dan Unix.
+	 *
+	 * @param mixed $n Serial Excel.
+	 * @return string|null Y-m-d, atau null bila di luar rentang tanggal.
+	 */
+	public static function serial_ke_tanggal( $n ) {
 		$n = (float) $n;
 		if ( $n <= 0 || $n > 2958465 ) {
 			return null;
 		}
 		$hari  = (int) floor( $n );
-		$hari -= ( $hari > 59 ) ? 1 : 0;
-		return gmdate( 'Y-m-d', ( $hari - 25569 ) * 86400 );
+		$epoch = ( $hari > 59 ) ? 25569 : 25568;
+		return gmdate( 'Y-m-d', ( $hari - $epoch ) * 86400 );
 	}
 
 	/**

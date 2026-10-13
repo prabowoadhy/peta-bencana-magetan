@@ -142,3 +142,280 @@
 .pbm-btn:hover { background: #2a4a76; }
 .pbm-btn-ghost { background: #fff; color: #1d3557; }
 .pbm-btn-ghost:hover { background: #eef1f4; }
+
+/* ==================================================================== *
+ * Halaman publik — hanya di dalam .pbm-frontend, supaya tampilan admin  *
+ * yang memakai kelas sama tidak ikut berubah.                           *
+ * ==================================================================== */
+
+.pbm-frontend {
+	font: 14px/1.6 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+	color: #1d2327;
+}
+.pbm-frontend .pbm-map-publik {
+	border-radius: 8px;
+	box-shadow: 0 1px 3px rgba(16, 24, 40, .07);
+}
+.pbm-frontend .pbm-filter {
+	margin: 0 0 14px;
+	border-radius: 8px;
+	background: #f7f9fb;
+}
+.pbm-frontend .pbm-filter input[type="date"],
+.pbm-frontend .pbm-filter select { border-radius: 5px; padding: 6px 8px; }
+.pbm-frontend .pbm-btn { border-radius: 5px; padding: 7px 16px; }
+
+/* Kartu ringkasan */
+.pbm-frontend .pbm-stats { gap: 12px; margin-top: 14px; }
+.pbm-frontend .pbm-stat {
+	flex: 1 1 150px;
+	background: #fff;
+	border: 1px solid #e2e6ea;
+	border-left: 3px solid #a50f15;
+	border-radius: 7px;
+	padding: 11px 14px;
+	text-align: left;
+	box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
+.pbm-frontend .pbm-stat b {
+	font-size: 25px;
+	line-height: 1.15;
+	letter-spacing: -.02em;
+}
+.pbm-frontend .pbm-stat span {
+	display: block;
+	margin-top: 2px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: .05em;
+	color: #6b7684;
+}
+
+/* Panel bertumpuk: grafik jenis, lalu tabel bencana per desa */
+.pbm-stack {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	margin-top: 14px;
+}
+.pbm-panel {
+	background: #fff;
+	border: 1px solid #e2e6ea;
+	border-radius: 8px;
+	padding: 14px 16px 16px;
+	box-shadow: 0 1px 3px rgba(16, 24, 40, .05);
+}
+.pbm-panel-t {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin: 0 0 10px;
+	font: 600 15px/1.4 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+	color: #1d3557;
+}
+.pbm-panel-k { font-weight: 400; font-size: 12px; color: #8a94a1; }
+.pbm-kosong { margin: 6px 0; font-size: 13px; font-style: italic; color: #7b8794; }
+
+/* Kotak cari desa — di kepala panel tabel */
+.pbm-cari {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	margin: 0;
+	padding: 8px 10px;
+	font-family: inherit;
+	font-size: 13px;
+	line-height: 1.4;
+	border: 1px solid #ccd2d8;
+	border-radius: 6px;
+	background: #fbfcfd;
+	color: inherit;
+}
+.pbm-cari::placeholder { color: #98a2b3; }
+.pbm-cari:focus {
+	outline: 2px solid #1d3557;
+	outline-offset: -1px;
+	background: #fff;
+}
+.pbm-cari-kecil { width: auto; min-width: 230px; }
+
+/* Baris judul panel tabel: judul di kiri, kotak cari di kanan */
+.pbm-tabel-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 10px;
+}
+.pbm-tabel-bar .pbm-panel-t { margin: 0; }
+
+/* Wadah gulir — kepala kolom menempel ke atas, tiga kolom pertama ke kiri */
+.pbm-tabel-scroll {
+	max-height: 520px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	border: 1px solid #e2e6ea;
+	border-radius: 6px;
+	background: #fff;
+}
+.pbm-tabel {
+	width: 100%;
+	min-width: 1200px;
+	table-layout: fixed;
+	border-collapse: separate;
+	border-spacing: 0;
+	font: 400 13px/1.45 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+	color: #1d2327;
+}
+.pbm-tabel th,
+.pbm-tabel td {
+	box-sizing: border-box;
+	padding: 7px 9px;
+	border-bottom: 1px solid #eef1f4;
+	vertical-align: bottom;
+}
+
+/* Kepala kolom — pita selundup, teksnya boleh turun beberapa baris */
+.pbm-tabel thead th {
+	position: sticky;
+	top: 0;
+	z-index: 3;
+	padding: 0;
+	background: #f7f9fb;
+	border-bottom: 1px solid #dbe1e7;
+	font-weight: 600;
+}
+.pbm-th-btn {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 5px;
+	box-sizing: border-box;
+	width: 100%;
+	margin: 0;
+	padding: 9px 9px 8px;
+	border: 0;
+	background: transparent;
+	font: 600 11.5px/1.32 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+	color: #34495e;
+	text-align: left;
+	cursor: pointer;
+}
+.pbm-th-angka .pbm-th-btn { text-align: right; }
+.pbm-th-btn:hover { background: #eef2f6; color: #1d3557; }
+.pbm-th-btn:focus-visible { outline: 2px solid #1d3557; outline-offset: -2px; }
+.pbm-th.sorted .pbm-th-btn { background: #e9eff6; color: #1d3557; }
+
+/* Tanda arah urut */
+.pbm-sort-ind {
+	flex: 0 0 auto;
+	width: 0;
+	height: 0;
+	margin-bottom: 3px;
+	border: 3.5px solid transparent;
+	opacity: 0;
+}
+.pbm-th.sorted .pbm-sort-ind { opacity: 1; }
+.pbm-th.sorted.naik .pbm-sort-ind { border-bottom-color: currentColor; }
+.pbm-th.sorted.turun .pbm-sort-ind { border-top-color: currentColor; }
+
+/* Kolom No, Nama Desa, Nama Kecamatan menempel ke kiri saat digulir */
+.pbm-tabel th:nth-child(1), .pbm-tabel td:nth-child(1) { width: 44px; left: 0; }
+.pbm-tabel th:nth-child(2), .pbm-tabel td:nth-child(2) { width: 150px; left: 44px; }
+.pbm-tabel th:nth-child(3), .pbm-tabel td:nth-child(3) { width: 116px; left: 194px; }
+.pbm-tabel th:last-child { width: 76px; }
+.pbm-tabel tbody td:nth-child(-n+3) {
+	position: sticky;
+	z-index: 2;
+	background: #fff;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.pbm-tabel thead th:nth-child(-n+3) { z-index: 4; background: #f7f9fb; }
+
+/* Isi badan tabel */
+.pbm-tabel tbody td {
+	background: #fff;
+	white-space: nowrap;
+}
+.pbm-td-angka { text-align: right; font-variant-numeric: tabular-nums; }
+.pbm-td.nol { color: #b6bfc9; }
+.pbm-tabel tbody tr:last-child td { border-bottom: 0; }
+.pbm-tabel tbody tr:nth-child(even) td { background: #fafbfc; }
+.pbm-tabel tbody tr:hover td { background: #f2f6fa; }
+.pbm-tabel tbody tr.is-aktif td { background: #e9eff6; }
+.pbm-tabel tbody tr.pbm-baris { cursor: pointer; }
+.pbm-tabel tbody tr.pbm-baris:focus-visible { outline: 2px solid #1d3557; outline-offset: -2px; }
+
+/* Satu sel melintang untuk pesan "memuat" / "tidak ada" */
+.pbm-tabel tbody td.pbm-tabel-kosong {
+	position: static;
+	left: auto;
+	width: auto;
+	padding: 28px 14px;
+	text-align: center;
+	font-style: italic;
+	color: #7b8794;
+	border-bottom: 0;
+}
+
+/* Grafik kejadian per jenis bencana */
+.pbm-bars { margin: 0; padding: 0; list-style: none; }
+.pbm-bars li {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 0;
+	border-bottom: 1px dotted #eceff2;
+}
+.pbm-bars li:last-child { border-bottom: 0; }
+.pbm-bar-nama {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 13px;
+}
+.pbm-bar-jalur {
+	flex: 1 1 auto;
+	min-width: 40px;
+	height: 8px;
+	border-radius: 999px;
+	background: #eef1f4;
+	overflow: hidden;
+}
+.pbm-bar-isi { display: block; height: 100%; border-radius: 999px; }
+.pbm-bar-n { flex: 0 0 auto; min-width: 48px; font-size: 13px; text-align: right; }
+.pbm-bar-pct {
+	flex: 0 0 auto;
+	min-width: 34px;
+	font-size: 11.5px;
+	font-style: normal;
+	text-align: right;
+	color: #8a94a1;
+}
+.pbm-bar-total {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+	margin: 10px 0 0;
+	padding-top: 9px;
+	border-top: 1px solid #eef1f4;
+	font-size: 13px;
+	color: #5b6672;
+}
+.pbm-bar-total b { color: #a50f15; font-size: 15px; }
+
+/* Catatan ringkas di bawah panel */
+.pbm-frontend .pbm-rekap { margin-top: 14px; font-size: 13px; color: #5b6672; }
+.pbm-frontend .pbm-rekap p { margin: 0; }
+
+/* Susut di layar sempit */
+@media (max-width: 600px) {
+	.pbm-frontend .pbm-stat b { font-size: 21px; }
+	.pbm-tabel-bar { flex-direction: column; align-items: stretch; }
+	.pbm-cari-kecil { width: 100%; min-width: 0; }
+	.pbm-tabel-scroll { max-height: 380px; }
+}

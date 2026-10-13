@@ -16,6 +16,22 @@ class PBM_Import {
 
 	const NONCE = 'pbm_import';
 
+	/**
+	 * Rentang angka yang dianggap sebagai serial tanggal Excel bila format
+	 * selnya tidak terdeteksi tanggal. 20000 ≈ 1954-10-19, 80000 ≈ 2119-03-15.
+	 * Batas bawah sengaja dijaga cukup besar supaya angka biasa (tahun,
+	 * nomor urut, jumlah) tidak salah dibaca sebagai tanggal.
+	 */
+	const SERIAL_MIN = 20000;
+	const SERIAL_MAX = 80000;
+
+	/**
+	 * Ambang kemiripan nama desa (0-1) untuk menganggap nama sebagai typo
+	 * yang tetap dicocokkan. 0.82 ≈ satu huruf berbeda pada nama 6-8 huruf.
+	 * Hasil di bawah ambang dianggap desa tidak ditemukan.
+	 */
+	const AMBANG_MIRIP = 0.82;
+
 	/** Frasa header Excel -> nama kolom internal. */
 	private static function petunjuk() {
 		return array(
@@ -27,9 +43,9 @@ class PBM_Import {
 			'koordinat'        => array( 'koordinat', 'lintang', 'latitude', 'lat', 'bujur', 'longitude', 'lon' ),
 			'desa'             => array( 'desa' ),
 			'kecamatan'        => array( 'kecamatan' ),
-			'waktu_laporan'    => array( 'waktu laporan', 'tanggal laporan', 'tanggal' ),
+			'waktu_laporan'    => array( 'waktu laporan', 'tanggal laporan', 'tanggal pelaporan', 'tgl laporan', 'tgl pelaporan', 'tanggal' ),
 			'jam_lapor'        => array( 'jam lapor' ),
-			'waktu_kejadian'   => array( 'waktu kejadian', 'tanggal kejadian' ),
+			'waktu_kejadian'   => array( 'waktu kejadian', 'tanggal kejadian', 'tanggal terjadi', 'tgl kejadian', 'tgl terjadi' ),
 			'jam_kejadian'     => array( 'jam kejadian' ),
 			'dampak_manusia'   => array( 'manusia' ),
 			'dampak_hewan'     => array( 'hewan', 'ternak' ),
@@ -74,40 +90,47 @@ class PBM_Import {
 			if ( $ri > 25 ) {
 				break;
 			}
-			$gabung = array();
+
+			/* Teks header pada baris ini sendiri. */
+			$induk = array();
 			foreach ( $row as $ci => $v ) {
-				$gabung[ $ci ] = self::bersih( $v );
+				$t = self::bersih( $v );
+				if ( '' !== $t ) {
+					$induk[ $ci ] = $t;
+				}
 			}
-			/* Gabung 2 baris di bawahnya untuk header bertingkat. */
+
+			/*
+			 * Kandidat teks tiap kolom: teks baris header itu sendiri, teks
+			 * pada 2 baris di bawahnya, dan gabungan induk + sub-kolom.
+			 * Gabungan dibutuhkan untuk header bertingkat seperti register
+			 * BPBD: "WAKTU" di atas "LAPORAN" -> "waktu laporan".
+			 * Teks asli tiap baris tetap disimpan agar kasus lama
+			 * (mis. "DAMPAK" di baris atas, "Manusia" di baris bawah)
+			 * tetap terpetakan persis seperti sebelumnya.
+			 */
+			$kandidat_teks = array();
+			foreach ( $induk as $ci => $t ) {
+				$kandidat_teks[ $ci ][] = $t;
+			}
 			for ( $d = 1; $d <= 2; $d++ ) {
 				foreach ( ( $rows[ $ri + $d ] ?? array() ) as $ci => $v ) {
 					$t = self::bersih( $v );
-					if ( '' !== $t && empty( $gabung[ $ci ] ) ) {
-						$gabung[ $ci ] = $t;
+					if ( '' === $t ) {
+						continue;
+					}
+					$kandidat_teks[ $ci ][] = $t;
+					if ( isset( $induk[ $ci ] ) ) {
+						$kandidat_teks[ $ci ][] = $induk[ $ci ] . ' ' . $t;
 					}
 				}
 			}
 
-			$kandidat = array();
-			foreach ( $petunjuk as $field => $frasa ) {
-				if ( 'koordinat' === $field ) {
-					continue;
-				}
-				foreach ( $gabung as $ci => $teks ) {
-					if ( '' === $teks ) {
-						continue;
-					}
-					foreach ( $frasa as $fr ) {
-						if ( $teks === $fr && ! in_array( $ci, $kandidat, true ) ) {
-							$kandidat[ $field ] = $ci;
-							break 2;
-						}
-					}
-				}
-			}
+			$kandidat = self::petakan_kolom( $kandidat_teks, $petunjuk );
+
 			/* Kolom KOORDINAT: kolom pertama = lintang, berikutnya = bujur. */
-			foreach ( $gabung as $ci => $teks ) {
-				if ( in_array( 'koordinat', self::petunjuk_keys_match( $teks ), true ) ) {
+			foreach ( $kandidat_teks as $ci => $teks_list ) {
+				if ( in_array( 'koordinat', $teks_list, true ) ) {
 					$kandidat['koordinat'] = $ci;
 					break;
 				}
@@ -119,7 +142,24 @@ class PBM_Import {
 
 			$wajib = array( 'bencana', 'desa', 'kecamatan' );
 			$punya = count( array_intersect( $wajib, array_keys( $kandidat ) ) );
-			$skor  = count( $kandidat ) + $punya * 3;
+
+			/*
+			 * Bobot tambahan untuk field yang cocok dengan teks pada baris
+			 * header itu sendiri. Judul besar di atas tabel (mis. "DAFTAR
+			 * LAPORAN BENCANA TAHUN 2026") ikut meminjam teks header dari
+			 * baris di bawahnya, jadi pemetaannya benar tetapi baris itu
+			 * bukan header sungguhan. Tanpa bobot ini baris judul menang,
+			 * lalu baris header ikut terbaca sebagai data dan menghasilkan
+			 * satu baris sampah yang gagal disimpan.
+			 */
+			$mandiri = 0;
+			foreach ( $kandidat as $field => $ci ) {
+				if ( isset( $induk[ $ci ] )
+					&& in_array( $induk[ $ci ], $petunjuk[ $field ] ?? array(), true ) ) {
+					$mandiri++;
+				}
+			}
+			$skor = count( $kandidat ) + $punya * 3 + $mandiri;
 
 			if ( $punya >= 2 && $skor > $skor_max ) {
 				$skor_max = $skor;
@@ -145,8 +185,94 @@ class PBM_Import {
 		return $terbaik;
 	}
 
-	private static function petunjuk_keys_match( $teks ) {
-		return ( 'koordinat' === $teks ) ? array( 'koordinat' ) : array();
+	/**
+	 * Petakan kandidat teks kolom -> nama field.
+	 *
+	 * Pass 1: kecocokan persis dengan frasa kamus (perilaku lama).
+	 * Pass 2: kecocokan longgar (frasa sebagai awalan/akhiran teks) untuk
+	 *         kolom yang belum terpetakan, misal "Tanggal Laporan (D)" atau
+	 *         "Tanggal Kejadian Bencana". Frasa terpanjang menang agar
+	 *         "tanggal kejadian" mengalahkan "tanggal".
+	 *
+	 * @param array<int, string[]> $kandidat_teks Kandidat teks per kolom.
+	 * @param array<string, string[]> $petunjuk  Kamus frasa -> field.
+	 * @return array<string, int> field => indeks kolom.
+	 */
+	private static function petakan_kolom( array $kandidat_teks, array $petunjuk ) {
+		$peta    = array();
+		$dipakai = array();
+
+		/* Pass 1: persis. */
+		foreach ( $petunjuk as $field => $frasa ) {
+			if ( 'koordinat' === $field ) {
+				continue;
+			}
+			foreach ( $kandidat_teks as $ci => $teks_list ) {
+				if ( in_array( $ci, $dipakai, true ) ) {
+					continue;
+				}
+				foreach ( $teks_list as $teks ) {
+					if ( in_array( $teks, $frasa, true ) ) {
+						$peta[ $field ] = $ci;
+						$dipakai[]      = $ci;
+						continue 3;
+					}
+				}
+			}
+		}
+
+		/* Pass 2: longgar, frasa terpanjang menang per kolom. */
+		foreach ( $kandidat_teks as $ci => $teks_list ) {
+			if ( in_array( $ci, $dipakai, true ) ) {
+				continue;
+			}
+			$terbaik = null;
+			$panjang = 0;
+			foreach ( $petunjuk as $field => $frasa ) {
+				if ( 'koordinat' === $field || isset( $peta[ $field ] ) ) {
+					continue;
+				}
+				foreach ( $frasa as $fr ) {
+					if ( strlen( $fr ) <= $panjang ) {
+						continue;
+					}
+					foreach ( $teks_list as $teks ) {
+						if ( self::longgar( $teks, $fr ) ) {
+							$terbaik = $field;
+							$panjang = strlen( $fr );
+							break;
+						}
+					}
+				}
+			}
+			if ( $terbaik ) {
+				$peta[ $terbaik ] = $ci;
+				$dipakai[]        = $ci;
+			}
+		}
+
+		return $peta;
+	}
+
+	/**
+	 * Apakah $frasa menjadi awalan atau akhiran dari $teks?
+	 * Pemisah harus spasi agar kata setengah tidak ikut cocok.
+	 */
+	private static function longgar( $teks, $frasa ) {
+		$n = strlen( $frasa );
+		if ( '' === $teks || '' === $frasa ) {
+			return false;
+		}
+		if ( $teks === $frasa ) {
+			return true;
+		}
+		if ( strlen( $teks ) <= $n ) {
+			return false;
+		}
+		if ( 0 === strpos( $teks, $frasa . ' ' ) ) {
+			return true;
+		}
+		return ( ' ' === $teks[ strlen( $teks ) - $n - 1 ] && $frasa === substr( $teks, -$n ) );
 	}
 
 	/* -------------------------------------------------------- koordinat */
@@ -212,34 +338,90 @@ class PBM_Import {
 
 	/* ----------------------------------------------------------- tanggal */
 
-	/** Tanggal dari berbagai format -> Y-m-d. */
+	/** Nama bulan -> nomor bulan. Indonesia (lengkap & singkatan) dan Inggris. */
+	private static function daftar_bulan() {
+		static $bulan = null;
+		if ( null !== $bulan ) {
+			return $bulan;
+		}
+		$bulan = array(
+			/* Indonesia, huruf penuh. */
+			'januari' => 1, 'februari' => 2, 'maret' => 3, 'april' => 4, 'mei' => 5, 'juni' => 6,
+			'juli' => 7, 'agustus' => 8, 'september' => 9, 'oktober' => 10, 'november' => 11, 'desember' => 12,
+			/* Indonesia, singkatan yang lazim dipakai di dokumen. */
+			'jan' => 1, 'feb' => 2, 'mar' => 3, 'apr' => 4, 'jun' => 6,
+			'jul' => 7, 'agu' => 8, 'agt' => 8, 'sep' => 9, 'okt' => 10, 'nov' => 11, 'des' => 12,
+			/* Inggris. */
+			'january' => 1, 'february' => 2, 'march' => 3, 'may' => 5, 'june' => 6,
+			'july' => 7, 'august' => 8, 'september' => 9, 'october' => 10,
+			'november' => 11, 'december' => 12, 'sept' => 9,
+		);
+		return $bulan;
+	}
+
+	/**
+	 * Tanggal dari berbagai format -> Y-m-d, atau null bila tidak sah.
+	 *
+	 * Format yang diterima:
+	 *  - ISO `Y-m-d`, zero-pad boleh dihilangkan, waktu di belakangnya diabaikan;
+	 *  - `15 Januari 2026` / `15 Jan 2026` (nama bulan Indonesia/Inggris,
+	 *    lengkap maupun singkatan, titik setelah singkatan juga boleh);
+	 *  - `15/01/2026`, `15-01-2026`, `15.01.2026` (selalu HARI dulu);
+	 *  - angka serial Excel yang lolos dari deteksi gaya sel.
+	 *
+	 * Hasil SELALU divalidasi checkdate(), sehingga `32/13/2026` menghasilkan
+	 * null — bukan string tanggal rusak yang baru ketahuan saat penyimpanan.
+	 *
+	 * @param mixed $v Nilai sel.
+	 * @return string|null Y-m-d, atau null bila kosong/tidak terbaca/tidak sah.
+	 */
 	public static function tanggal( $v ) {
 		if ( null === $v || '' === $v ) {
 			return null;
 		}
 		$s = trim( (string) $v );
-		if ( preg_match( '/^(\d{4})-(\d{2})-(\d{2})/', $s, $m ) ) {
-			return $m[0];
+		if ( '' === $s ) {
+			return null;
 		}
-		$bulan = array(
-			'januari' => 1, 'februari' => 2, 'maret' => 3, 'april' => 4, 'mei' => 5, 'juni' => 6,
-			'juli' => 7, 'agustus' => 8, 'september' => 9, 'oktober' => 10, 'november' => 11, 'desember' => 12,
-		);
-		if ( preg_match( '/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/', $s, $m ) ) {
-			$b = $bulan[ strtolower( $m[2] ) ] ?? null;
-			if ( $b ) {
-				return sprintf( '%s-%02d-%02d', $m[3], $b, (int) $m[1] );
+
+		$y = $m = $d = 0;
+
+		if ( preg_match( '/^(\d{4})-(\d{1,2})-(\d{1,2})/', $s, $x ) ) {
+			/* ISO: 2026-01-15, 2026-1-5, 2026-01-15 10:30, 2026-01-15T10:30:00 */
+			$y = (int) $x[1];
+			$m = (int) $x[2];
+			$d = (int) $x[3];
+		} elseif ( preg_match( '/^(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{4})/', $s, $x ) ) {
+			/* 15 Januari 2026 / 15 Jan 2026 / 15 Jan. 2026 */
+			$b = self::daftar_bulan()[ strtolower( $x[2] ) ] ?? 0;
+			if ( ! $b ) {
+				return null;
 			}
+			$y = (int) $x[3];
+			$m = $b;
+			$d = (int) $x[1];
+		} elseif ( preg_match( '/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/', $s, $x ) ) {
+			/* 15/01/2026, 15-01-2026, 15.01.2026 -> selalu hari dulu. */
+			$y = (int) $x[3];
+			$m = (int) $x[2];
+			$d = (int) $x[1];
+		} elseif ( is_numeric( $s ) ) {
+			/* Serial Excel yang tidak terdeteksi sebagai sel tanggal.
+			 * Rentang 20000-80000 kira-kira 1954-10-19 .. 2119-03-15; di
+			 * luar rentang itu angka dianggap bukan tanggal. */
+			$n = (float) $s;
+			if ( $n < self::SERIAL_MIN || $n > self::SERIAL_MAX ) {
+				return null;
+			}
+			return PBM_Xlsx::serial_ke_tanggal( $n );
+		} else {
+			return null;
 		}
-		if ( preg_match( '/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/', $s, $m ) ) {
-			return sprintf( '%s-%02d-%02d', $m[3], (int) $m[2], (int) $m[1] );
+
+		if ( ! checkdate( $m, $d, $y ) ) {
+			return null;
 		}
-		if ( is_numeric( $s ) && $s > 20000 && $s < 60000 ) {
-			$hari  = (int) floor( (float) $s );
-			$hari -= ( $hari > 59 ) ? 1 : 0;
-			return gmdate( 'Y-m-d', ( $hari - 25569 ) * 86400 );
-		}
-		return null;
+		return sprintf( '%04d-%02d-%02d', $y, $m, $d );
 	}
 
 	/** Jam: buang akhiran WIB, sisanya apa adanya. */
@@ -299,7 +481,36 @@ class PBM_Import {
 		return $peta;
 	}
 
-	private static function mirip( $needle, array $kandidat ) {
+	/**
+	 * Skor kemiripan dua nama desa, 0-1, sudah dinormalkan.
+	 *
+	 * Dipakai bersama oleh pencocokan impor dan halaman Master Desa, supaya
+	 * persentase yang dilihat operator identik dengan yang dipakai sistem
+	 * saat memutuskan sebuah nama "tidak cocok".
+	 *
+	 * @param string $a Nama pertama.
+	 * @param string $b Nama kedua.
+	 * @return float
+	 */
+	public static function skor_nama( $a, $b ) {
+		$a = self::norm_desa( $a );
+		$b = self::norm_desa( $b );
+		$maks = max( strlen( $a ), strlen( $b ) );
+		if ( 0 === $maks ) {
+			return 0.0;
+		}
+		return ( $maks - levenshtein( $a, $b ) ) / $maks;
+	}
+
+	/**
+	 * Cari kandidat nama paling mirip.
+	 *
+	 * @param string     $needle  Nama yang dicari (sudah dinormalkan).
+	 * @param string[]   $kandidat Nama-nama kandidat (sudah dinormalkan).
+	 * @param float|null $skor    Diisi skor kemiripan terbaik (0-1).
+	 * @return string|null Nama kandidat terbaik, atau null bila di bawah ambang.
+	 */
+	private static function mirip( $needle, array $kandidat, &$skor = null ) {
 		$terbaik = null;
 		$skor    = 0.0;
 		foreach ( $kandidat as $h ) {
@@ -313,16 +524,39 @@ class PBM_Import {
 				$terbaik = $h;
 			}
 		}
-		return ( $skor >= 0.82 ) ? $terbaik : null;
+		return ( $skor >= self::AMBANG_MIRIP ) ? $terbaik : null;
 	}
 
-	/** Cocokkan desa+kecamatan Excel ke master desa. */
-	public static function cari_desa( $kecamatan, $desa ) {
-		$peta = self::peta_desa();
-		$k    = self::norm_desa( $kecamatan );
-		$d    = self::norm_desa( $desa );
+	/**
+	 * Cocokkan desa+kecamatan Excel ke master desa.
+	 *
+	 * Pencocokan berjenjang, dari yang paling bisa dipercaya:
+	 *  - persis            nama desa + kecamatan ada persis di peta;
+	 *  - alias             salah eja yang sudah dikenal (tabel alias);
+	 *  - alias_kecamatan   ejaan kecamatan salah, desa persis;
+	 *  - lintas_kecamatan  nama desa persis ada, tapi di kecamatan lain;
+	 *  - mirip             kemiripan nama dalam kecamatan yang sama (kemungkinan typo);
+	 *  - mirip_lintas      kemiripan nama lintas kecamatan (kemungkinan typo).
+	 *
+	 * Metode persis/alias dianggap aman. Sisanya sengaja dilaporkan ke
+	 * pratinjau supaya petugas memeriksa sendiri, bukan diam-diam
+	 * menempelkan desa yang salah karena satu huruf berbeda.
+	 *
+	 * @param string      $kecamatan Kecamatan dari Excel.
+	 * @param string      $desa      Desa dari Excel.
+	 * @param string|null $metode    Diisi tingkat kecocokan (lihat di atas), atau null bila tidak ada.
+	 * @param float|null  $skor      Diisi skor kemiripan (0-1) untuk metode mirip*.
+	 * @return array|null {kode, nama, kecamatan} atau null.
+	 */
+	public static function cari_desa( $kecamatan, $desa, &$metode = null, &$skor = null ) {
+		$metode = null;
+		$skor   = null;
+		$peta   = self::peta_desa();
+		$k      = self::norm_desa( $kecamatan );
+		$d      = self::norm_desa( $desa );
 
 		if ( isset( $peta[ $k ][ $d ] ) ) {
+			$metode = 'persis';
 			return $peta[ $k ][ $d ];
 		}
 		/* Alias salah tulis yang sering muncul. */
@@ -335,28 +569,35 @@ class PBM_Import {
 			'SENDANGAGUNG'   => 'SENDANGAGUNG',
 		);
 		if ( isset( $alias[ $d ], $peta[ $k ][ $alias[ $d ] ] ) ) {
+			$metode = 'alias';
 			return $peta[ $k ][ $alias[ $d ] ];
 		}
 		$kec_alias = array( 'PARAG' => 'PARANG', 'MAGETANKOTA' => 'MAGETAN' );
 		if ( isset( $kec_alias[ $k ], $peta[ $kec_alias[ $k ] ][ $d ] ) ) {
+			$metode = 'alias_kecamatan';
 			return $peta[ $kec_alias[ $k ] ][ $d ];
 		}
 		/* Nama desa sama di kecamatan lain. */
 		foreach ( $peta as $list ) {
 			if ( isset( $list[ $d ] ) ) {
+				$metode = 'lintas_kecamatan';
 				return $list[ $d ];
 			}
 		}
 		/* Kemiripan nama dalam kecamatan yang sama, lalu lintas kecamatan. */
 		if ( isset( $peta[ $k ] ) ) {
-			$m = self::mirip( $d, array_keys( $peta[ $k ] ) );
+			$m = self::mirip( $d, array_keys( $peta[ $k ] ), $s );
 			if ( $m ) {
+				$metode = 'mirip';
+				$skor   = $s;
 				return $peta[ $k ][ $m ];
 			}
 		}
 		foreach ( $peta as $list ) {
-			$m = self::mirip( $d, array_keys( $list ) );
+			$m = self::mirip( $d, array_keys( $list ), $s );
 			if ( $m ) {
+				$metode = 'mirip_lintas';
+				$skor   = $s;
 				return $list[ $m ];
 			}
 		}
@@ -427,7 +668,9 @@ class PBM_Import {
 
 		$desa_raw = (string) $get( 'desa' );
 		$kec_raw  = (string) $get( 'kecamatan' );
-		$master   = self::cari_desa( $kec_raw, $desa_raw );
+		$metode   = null;
+		$skor     = null;
+		$master   = self::cari_desa( $kec_raw, $desa_raw, $metode, $skor );
 
 		if ( $master ) {
 			$kode    = $master['kode'];
@@ -435,14 +678,17 @@ class PBM_Import {
 			$kec     = $master['kecamatan'];
 			$catatan = '';
 		} else {
-			/* Desa belum ada di peta: daftarkan agar laporan tidak hilang. */
+			/*
+			 * Desa belum ada di peta: beri kode sementara agar laporan tidak
+			 * hilang. Pendaftaran ke tabel master TIDAK dilakukan di sini —
+			 * pratinjau harus bebas efek samping. Master desa hanya diisi
+			 * dari GeoJSON saat aktivasi/pembaruan; desa di luar peta baru
+			 * didaftarkan saat impor benar-benar dijalankan.
+			 */
 			$kode = 'X' . substr( preg_replace( '/[^A-Z]/', '', strtoupper( $kec_raw ) ), 0, 3 )
 				. substr( preg_replace( '/[^A-Z]/', '', strtoupper( $desa_raw ) ), 0, 8 );
 			$desa = ucwords( strtolower( $desa_raw ) );
 			$kec  = ucwords( strtolower( $kec_raw ) );
-			if ( strlen( $kode ) > 1 ) {
-				PBM_Desa::pastikan( $kode, $desa ?: '(tanpa nama)', $kec ?: '-' );
-			}
 			$catatan = 'Desa belum ada di peta polygon (kode sementara). ';
 		}
 
@@ -482,6 +728,11 @@ class PBM_Import {
 			'_bencana'     => $bencana,
 			'_match'       => $master ? 'ok' : 'baru',
 			'_existing'    => PBM_Laporan::cari_duplikat( $tgl, $kode, $bencana ),
+			/* Hasil pencocokan desa, untuk notifikasi pratinjau. */
+			'_metode'      => $metode,
+			'_skor'        => $skor,
+			'_desa_excel'  => $desa_raw,
+			'_kec_excel'   => $kec_raw,
 		);
 	}
 
@@ -506,6 +757,25 @@ class PBM_Import {
 		exit;
 	}
 
+	/**
+	 * Daftarkan desa di luar peta ke tabel master.
+	 *
+	 * Dipanggil hanya saat impor dijalankan, bukan saat pratinjau, supaya
+	 * tabel master desa tetap murni berisi data dari GeoJSON peta dan
+	 * pratinjau yang dibatalkan tidak meninggalkan jejak.
+	 */
+	private static function daftarkan_desa_luar( $row ) {
+		$kode = (string) ( $row['kode_desa'] ?? '' );
+		if ( '' === $kode || PBM_Desa::find( $kode ) ) {
+			return;
+		}
+		PBM_Desa::pastikan(
+			$kode,
+			! empty( $row['desa'] ) ? $row['desa'] : '(tanpa nama)',
+			! empty( $row['kecamatan'] ) ? $row['kecamatan'] : '-'
+		);
+	}
+
 	public static function proses() {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			wp_die( 'Akses ditolak.' );
@@ -523,10 +793,12 @@ class PBM_Import {
 
 		foreach ( $data['hasil'] as $row ) {
 			if ( $row['_existing'] && $timpa ) {
+				self::daftarkan_desa_luar( $row );
 				is_wp_error( PBM_Laporan::simpan( $row, (int) $row['_existing'] ) ) ? $gagal++ : $ubah++;
 			} elseif ( $row['_existing'] ) {
 				$lewat++;
 			} else {
+				self::daftarkan_desa_luar( $row );
 				is_wp_error( PBM_Laporan::simpan( $row ) ) ? $gagal++ : $baru++;
 			}
 		}

@@ -14,6 +14,7 @@ class PBM_Admin {
 		add_action( 'admin_post_pbm_simpan', array( __CLASS__, 'simpan' ) );
 		add_action( 'admin_post_pbm_hapus', array( __CLASS__, 'hapus' ) );
 		add_action( 'admin_post_pbm_export', array( __CLASS__, 'export_csv' ) );
+		add_action( 'admin_post_pbm_hapus_desa', array( __CLASS__, 'hapus_desa' ) );
 		add_action( 'admin_enqueue_scripts', array( __CLASS__, 'assets' ) );
 	}
 
@@ -24,6 +25,7 @@ class PBM_Admin {
 		);
 		add_submenu_page( 'pbm-peta', 'Peta', 'Peta', 'manage_options', 'pbm-peta', array( __CLASS__, 'halaman_peta' ) );
 		add_submenu_page( 'pbm-peta', 'Data Bencana', 'Data Bencana', 'manage_options', 'pbm-data', array( __CLASS__, 'halaman_data' ) );
+		add_submenu_page( 'pbm-peta', 'Master Desa', 'Master Desa', 'manage_options', 'pbm-desa', array( __CLASS__, 'halaman_desa' ) );
 		add_submenu_page( 'pbm-peta', 'Impor Excel', 'Impor Excel', 'manage_options', 'pbm-import', array( __CLASS__, 'halaman_import' ) );
 	}
 
@@ -197,6 +199,113 @@ class PBM_Admin {
 		echo '</div></form>';
 	}
 
+	/* -------------------------------------------------------- header urut */
+
+	/**
+	 * Kolom yang sedang diurutkan, sudah lewat whitelist.
+	 *
+	 * @param string[] $boleh Kolom yang boleh dipakai halaman ini.
+	 * @param string   $awal  Nilai bila URL belum menentukan kolom.
+	 * @return string
+	 */
+	private static function urut_aktif( array $boleh, $awal ) {
+		$urut = sanitize_text_field( wp_unslash( $_GET['urut'] ?? '' ) );
+		return in_array( $urut, $boleh, true ) ? $urut : $awal;
+	}
+
+	/**
+	 * Arah pengurutan aktif, hanya 'naik' atau 'turun'.
+	 *
+	 * Saat URL belum menyebut arah, arah bawaan mengikuti kolomnya: kolom
+	 * tanggal dibuka dari yang terbaru supaya sejatif dengan tampilan
+	 * sebelum ada sortir.
+	 *
+	 * @param string   $kolom     Kolom yang sedang diurutkan.
+	 * @param string[] $awal_desc Kolom yang bawaannya turun (terbaru dulu).
+	 * @return string
+	 */
+	private static function arah_aktif( $kolom, array $awal_desc = array() ) {
+		$arah = sanitize_text_field( wp_unslash( $_GET['arah'] ?? '' ) );
+		if ( 'naik' === $arah || 'turun' === $arah ) {
+			return $arah;
+		}
+		return in_array( $kolom, $awal_desc, true ) ? 'turun' : 'naik';
+	}
+
+	/**
+	 * URL untuk mengurutkan satu kolom.
+	 *
+	 * Parameter filter ikut dibawa agar pencarian/halaman tidak hilang saat
+	 * sortir diklik, sedangkan `paged` dibuang karena pengurutan baru selalu
+	 * dimulai dari halaman pertama.
+	 *
+	 * @param string   $kolom Kolom tujuan.
+	 * @param string   $arah  Arah tujuan.
+	 * @param string[] $buang Parameter yang tidak ikut dibawa.
+	 * @return string
+	 */
+	private static function url_urut( $kolom, $arah, array $buang = array() ) {
+		$ambil = array();
+		foreach ( $_GET as $k => $v ) {
+			$k = preg_replace( '/[^a-z0-9_]/i', '', (string) $k );
+			if ( '' === $k || in_array( $k, $buang, true ) || ! is_scalar( $v ) ) {
+				continue;
+			}
+			$ambil[ $k ] = sanitize_text_field( wp_unslash( $v ) );
+		}
+		$ambil['urut'] = $kolom;
+		$ambil['arah'] = $arah;
+		unset( $ambil['paged'] );
+		return add_query_arg( $ambil, admin_url( 'admin.php' ) );
+	}
+
+	/**
+	 * Satu sel header tabel yang bisa diklik untuk mengurutkan.
+	 *
+	 * @param string $kolom Kode kolom, dikirim lewat parameter `urut`.
+	 * @param string $label Tampilan.
+	 * @param string $urut  Kolom yang sedang aktif.
+	 * @param string $arah  Arah yang sedang aktif.
+	 * @param string $awal  Arah pertama saat kolom ini belum pernah diklik.
+	 */
+	private static function th_urut( $kolom, $label, $urut, $arah, $awal = 'naik' ) {
+		$aktif = ( $urut === $kolom );
+		$tuju  = $aktif ? ( 'naik' === $arah ? 'turun' : 'naik' ) : $awal;
+		$url   = self::url_urut( $kolom, $tuju, array( 'urut', 'arah' ) );
+
+		printf(
+			'<th scope="col" class="sortable-column%s%s" aria-sort="%s">'
+			. '<a href="%s"><span>%s</span><span class="pbm-sort-ind" aria-hidden="true"></span></a></th>',
+			$aktif ? ' sorted' : '',
+			$aktif && 'naik' === $arah ? ' asc' : ( $aktif ? ' desc' : '' ),
+			$aktif ? ( 'naik' === $arah ? 'ascending' : 'descending' ) : 'none',
+			esc_url( $url ),
+			esc_html( $label )
+		);
+	}
+
+	/** Header biasa untuk kolom yang tidak bisa diurutkan (mis. Aksi). */
+	private static function th_biasa( $label ) {
+		printf( '<th scope="col" class="sortable-column-none">%s</th>', esc_html( $label ) );
+	}
+
+	/**
+	 * Sembunyikan kolom sortir aktif di dalam form filter.
+	 *
+	 * Form memakai method GET, jadi tanpa input tersembunyi urutan akan
+	 * hilang begitu petugas menekan tombol Filter.
+	 *
+	 * @param string $urut Kolom aktif.
+	 * @param string $arah Arah aktif.
+	 */
+	private static function input_urut_tersembunyi( $urut, $arah ) {
+		printf(
+			'<input type="hidden" name="urut" value="%s"><input type="hidden" name="arah" value="%s">',
+			esc_attr( $urut ),
+			esc_attr( $arah )
+		);
+	}
+
 	private static function tabel_data() {
 		$f = array(
 			'dari'      => sanitize_text_field( $_GET['dari'] ?? '' ),
@@ -208,12 +317,18 @@ class PBM_Admin {
 		$paged  = max( 1, absint( $_GET['paged'] ?? 1 ) );
 		$per    = 25;
 		$jumlah = PBM_Laporan::hitung( $f );
-		$rows   = PBM_Laporan::daftar( $f, $per, ( $paged - 1 ) * $per );
+
+		$kolom_tampil = array( 'no', 'nodin', 'bencana', 'dampak_bencana', 'lokasi', 'lat', 'lon', 'desa', 'kecamatan', 'waktu_laporan', 'jam_lapor', 'waktu_kejadian', 'jam_kejadian', 'dampak_manusia', 'dampak_hewan', 'dampak_rumah', 'dampak_harta', 'dampak_jalan', 'dampak_fasilitas', 'dampak_jembatan', 'nilai_kerusakan', 'keterangan' );
+		$urut = self::urut_aktif( $kolom_tampil, 'waktu_laporan' );
+		/* Kolom tanggal dibuka dari terbaru dulu — sama seperti sebelum ada sortir. */
+		$arah = self::arah_aktif( $urut, array( 'waktu_laporan', 'waktu_kejadian' ) );
+		$rows = PBM_Laporan::daftar( $f, $per, ( $paged - 1 ) * $per, $urut, $arah );
 
 		echo '<h2>Daftar Data <span class="pbm-count">(' . number_format_i18n( $jumlah ) . ' baris)</span></h2>';
 
 		echo '<form method="get" class="pbm-filter-form">';
 		echo '<input type="hidden" name="page" value="pbm-data">';
+		self::input_urut_tersembunyi( $urut, $arah );
 		echo '<label>Cari <input type="search" name="cari" value="' . esc_attr( $f['cari'] ) . '" placeholder="desa / lokasi / nodin"></label>';
 		echo '<label>Dari <input type="date" name="dari" value="' . esc_attr( $f['dari'] ) . '"></label>';
 		echo '<label>Sampai <input type="date" name="sampai" value="' . esc_attr( $f['sampai'] ) . '"></label>';
@@ -230,13 +345,18 @@ class PBM_Admin {
 		echo '<button class="button">Filter</button>';
 		echo '</form>';
 
-		$kolom_tampil = array( 'no', 'nodin', 'bencana', 'dampak_bencana', 'lokasi', 'lat', 'lon', 'desa', 'kecamatan', 'waktu_laporan', 'jam_lapor', 'waktu_kejadian', 'jam_kejadian', 'dampak_manusia', 'dampak_hewan', 'dampak_rumah', 'dampak_harta', 'dampak_jalan', 'dampak_fasilitas', 'dampak_jembatan', 'nilai_kerusakan', 'keterangan' );
-
 		echo '<div class="pbm-scroll"><table class="widefat striped pbm-table"><thead><tr>';
 		foreach ( $kolom_tampil as $k ) {
-			echo '<th>' . esc_html( PBM_Skema::label( $k ) ) . '</th>';
+			self::th_urut(
+				$k,
+				PBM_Skema::label( $k ),
+				$urut,
+				$arah,
+				in_array( $k, array( 'waktu_laporan', 'waktu_kejadian' ), true ) ? 'turun' : 'naik'
+			);
 		}
-		echo '<th>Aksi</th></tr></thead><tbody>';
+		self::th_biasa( 'Aksi' );
+		echo '</tr></thead><tbody>';
 
 		if ( ! $rows ) {
 			echo '<tr><td colspan="' . ( count( $kolom_tampil ) + 1 ) . '">Belum ada data.</td></tr>';
@@ -259,7 +379,10 @@ class PBM_Admin {
 		if ( $total_hal > 1 ) {
 			echo '<div class="tablenav"><div class="tablenav-pages">';
 			for ( $i = 1; $i <= $total_hal; $i++ ) {
-				$url = add_query_arg( array_merge( $f, array( 'page' => 'pbm-data', 'paged' => $i ) ), admin_url( 'admin.php' ) );
+				$url = add_query_arg(
+					array_merge( $f, array( 'page' => 'pbm-data', 'paged' => $i, 'urut' => $urut, 'arah' => $arah ) ),
+					admin_url( 'admin.php' )
+				);
 				echo ( $i === $paged )
 					? '<span class="paging-input current">' . $i . '</span> '
 					: '<a class="page-numbers" href="' . esc_url( $url ) . '">' . $i . '</a> ';
@@ -286,6 +409,458 @@ class PBM_Admin {
 	}
 
 	/* ------------------------------------------------------------ IMPOR */
+
+	/* ------------------------------------------------- halaman master desa */
+
+	/** @return int[] Peta desa bawaan, sekali muat untuk seluruh halaman. */
+	private static function daftar_peta() {
+		static $cache = null;
+		if ( null === $cache ) {
+			$cache = PBM_Desa::all( '', PBM_Desa::SUMBER_PETA );
+		}
+		return $cache;
+	}
+
+	/** @return array<string,int> Jumlah laporan per kode desa, sekali muat. */
+	private static function hitung_laporan() {
+		static $cache = null;
+		if ( null === $cache ) {
+			$cache = PBM_Desa::laporan_per_desa();
+		}
+		return $cache;
+	}
+
+	/** Halaman Master Desa: daftar desa terdaftar + alat cek ejaan. */
+	public static function halaman_desa() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		$notice = sanitize_text_field( wp_unslash( $_GET['pbm_notice'] ?? '' ) );
+		$impor  = PBM_Desa::count_sumber( PBM_Desa::SUMBER_IMPOR );
+
+		echo '<div class="wrap pbm-wrap">';
+		echo '<h1>Master Desa</h1>';
+		printf(
+			'<p class="pbm-sub">Daftar desa yang dikenali sistem, diambil dari batas wilayah peta (ekspor QGIS). '
+			. '<b>%d desa bawaan tidak bisa dihapus</b> karena menjadi acuan penggambaran polygon. '
+			. 'Sebelum mengimpor Excel, pastikan nama desa sudah terdaftar di sini — '
+			. 'ejaan yang salah justru membuat sistem mencatat desa baru di luar peta.</p>',
+			(int) PBM_Desa::count_sumber( PBM_Desa::SUMBER_PETA )
+		);
+
+		self::notice_desa( $notice );
+		self::kartu_desa();
+		self::box_typo();
+		self::cek_desa();
+		self::tabel_master_desa();
+
+		echo '</div>';
+	}
+
+	/** Notifikasi hasil aksi hapus/perbaikan. */
+	private static function notice_desa( $notice ) {
+		if ( 'desa_dihapus' === $notice ) {
+			$pindah = absint( $_GET['pindah'] ?? 0 );
+			printf(
+				'<div class="notice notice-success is-dismissible"><p>Desa dihapus%s.</p></div>',
+				$pindah ? sprintf( ' dan <b>%d laporan</b> dipindahkan ke desa tujuan', $pindah ) : ''
+			);
+		} elseif ( 'desa_gagal' === $notice ) {
+			echo '<div class="notice notice-error"><p><b>Desa bawaan peta tidak bisa dihapus.</b> '
+				. 'Hanya desa yang tercatat lewat impor yang boleh dihapus.</p></div>';
+		} elseif ( 'desa_tujuan' === $notice ) {
+			echo '<div class="notice notice-error"><p>Desa tujuan tidak valid. '
+				. 'Pilih desa bawaan peta sebagai tujuan pemindahan laporan.</p></div>';
+		} elseif ( 'desa_punya_laporan' === $notice ) {
+			echo '<div class="notice notice-error"><p>Desa ini masih mempunyai laporan. '
+				. 'Pindahkan laporannya ke desa yang benar lebih dulu agar tidak ada data yang hilang.</p></div>';
+		}
+	}
+
+	/** Ringkasan jumlah desa menurut sumber. */
+	private static function kartu_desa() {
+		$kartu = array(
+			/* label => [jumlah, kelas tambahan bila perlu ditonjolkan] */
+			'Total desa'     => array( PBM_Desa::count(), '' ),
+			'Bawaan peta'    => array( PBM_Desa::count_sumber( PBM_Desa::SUMBER_PETA ), '' ),
+			'Ditambah impor' => array(
+				PBM_Desa::count_sumber( PBM_Desa::SUMBER_IMPOR ),
+				PBM_Desa::count_sumber( PBM_Desa::SUMBER_IMPOR ) ? ' pbm-card-hitung' : '',
+			),
+			'Kecamatan'      => array( count( PBM_Desa::kecamatan_list() ), '' ),
+		);
+
+		echo '<div class="pbm-cards">';
+		foreach ( $kartu as $label => $k ) {
+			printf(
+				'<div class="pbm-card%s"><span class="pbm-card-n">%d</span><span class="pbm-card-l">%s</span></div>',
+				esc_attr( $k[1] ),
+				(int) $k[0],
+				esc_html( $label )
+			);
+		}
+		echo '</div>';
+	}
+
+	/**
+	 * Desa impor yang namanya mirip desa peta — kandidat salah ejaan.
+	 *
+	 * Inilah akar masalah yang ingin dicegah: satu huruf berbeda membuat
+	 * impor mencatat desa baru padahal aslinya sudah ada di peta.
+	 */
+	private static function box_typo() {
+		$kandidat = PBM_Desa::kandidat_typo();
+		if ( ! $kandidat ) {
+			return;
+		}
+
+		echo '<h2>Kemungkinan salah ejaan <span class="pbm-count">' . count( $kandidat ) . ' desa</span></h2>';
+		echo '<div class="pbm-box pbm-box-warn">';
+		echo '<p>Desa berikut <b>bukan bagian dari peta</b>, tetapi namanya sangat mirip desa bawaan. '
+			. 'Kemungkinan besar ejaan yang salah saat impor. Perbaiki dengan memindahkan laporannya '
+			. 'ke desa yang benar, lalu desa salahnya dihapus.</p>';
+		echo '<div class="pbm-scroll"><table class="widefat striped pbm-table"><thead><tr>';
+		echo '<th>Desa impor</th><th>Kecamatan</th><th>Mirip dengan</th><th>Kecamatan</th>'
+			. '<th>Kemiripan</th><th>Laporan</th><th>Perbaikan</th>';
+		echo '</tr></thead><tbody>';
+
+		foreach ( $kandidat as $k ) {
+			$impor = $k->impor;
+			$peta  = $k->peta;
+			$n     = self::hitung_laporan()[ $impor->kode ] ?? 0;
+
+			echo '<tr>';
+			echo '<td><b>' . esc_html( $impor->nama ) . '</b> <span class="pbm-muted">' . esc_html( $impor->kode ) . '</span></td>';
+			echo '<td>' . esc_html( $impor->kecamatan ) . '</td>';
+			echo '<td>' . esc_html( $peta->nama ) . ' <span class="pbm-muted">' . esc_html( $peta->kode ) . '</span></td>';
+			echo '<td>' . esc_html( $peta->kecamatan ) . '</td>';
+			echo '<td><span class="pbm-tag pbm-tag-cek">' . (int) round( $k->skor * 100 ) . '%</span></td>';
+			echo '<td>' . ( $n ? '<b>' . (int) $n . '</b>' : '<span class="pbm-muted">0</span>' ) . '</td>';
+			echo '<td>';
+			self::form_hapus_desa( $impor, $n );
+			echo '</td>';
+			echo '</tr>';
+		}
+		echo '</tbody></table></div></div>';
+	}
+
+	/**
+	 * Formulir hapus desa impor — dengan pemindahan laporan bila ada.
+	 *
+	 * @param object $impor Baris desa impor.
+	 * @param int    $n     Jumlah laporan pada desa tersebut.
+	 */
+	private static function form_hapus_desa( $impor, $n ) {
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="pbm-form-desa">';
+		echo '<input type="hidden" name="action" value="pbm_hapus_desa">';
+		echo '<input type="hidden" name="kode" value="' . esc_attr( $impor->kode ) . '">';
+		wp_nonce_field( 'pbm_hapus_desa_' . $impor->kode );
+
+		if ( $n > 0 ) {
+			$peta = self::daftar_peta();
+			/* Desa di kecamatan sama didahulukan, biasanya itu yang benar. */
+			usort(
+				$peta,
+				static function ( $a, $b ) use ( $impor ) {
+					$sa  = ( $a->kecamatan === $impor->kecamatan ) ? 0 : 1;
+					$sb  = ( $b->kecamatan === $impor->kecamatan ) ? 0 : 1;
+					return ( $sa <=> $sb ) ?: strcmp( $a->nama, $b->nama );
+				}
+			);
+			echo '<select name="pindah_ke" class="pbm-sel-desa">';
+			foreach ( $peta as $d ) {
+				echo '<option value="' . esc_attr( $d->kode ) . '">'
+					. esc_html( $d->nama . ' — ' . $d->kecamatan ) . '</option>';
+			}
+			echo '</select>';
+			echo '<button type="submit" class="button button-primary">Pindahkan &amp; hapus</button>';
+		} else {
+			echo '<input type="hidden" name="pindah_ke" value="">';
+			echo '<button type="submit" class="button">Hapus</button>';
+		}
+		echo '</form>';
+	}
+
+	/** Alat cek: apakah nama desa di Excel sudah terdaftar? */
+	private static function cek_desa() {
+		$cari = sanitize_text_field( wp_unslash( $_GET['cek_desa'] ?? '' ) );
+		$kec  = sanitize_text_field( wp_unslash( $_GET['cek_kec'] ?? '' ) );
+
+		echo '<h2>Cek nama desa sebelum impor</h2>';
+		echo '<div class="pbm-box">';
+		echo '<p class="pbm-sub">Ketik nama persis seperti tertulis di berkas Excel. '
+			. 'Ini langkah paling cepat untuk mencegah tercatatnya desa baru yang sebenarnya salah eja.</p>';
+		echo '<form method="get" class="pbm-cari-desa">';
+		echo '<input type="hidden" name="page" value="pbm-desa">';
+		echo '<label><span>Nama desa</span> <input type="search" name="cek_desa" value="' . esc_attr( $cari )
+			. '" placeholder="mis. Mategal" autocomplete="off"></label>';
+		echo '<label><span>Kecamatan</span> <select name="cek_kec"><option value="">Semua kecamatan</option>';
+		foreach ( PBM_Desa::kecamatan_list() as $k ) {
+			echo '<option value="' . esc_attr( $k ) . '"' . selected( $kec, $k, false ) . '>'
+				. esc_html( $k ) . '</option>';
+		}
+		echo '</select></label>';
+		echo '<button class="button button-primary">Cek</button>';
+		echo '</form>';
+
+		if ( '' !== $cari ) {
+			self::hasil_cek( $cari, $kec );
+		}
+		echo '</div>';
+	}
+
+	/** Hasil pengecekan: ditemukan (beserta sumbernya) atau tidak + saran. */
+	private static function hasil_cek( $cari, $kec ) {
+		$metode = $skor = null;
+		$hasil  = PBM_Import::cari_desa( $kec, $cari, $metode, $skor );
+
+		if ( ! $hasil ) {
+			echo '<div class="pbm-cek pbm-cek-gagal">';
+			printf(
+				'<p><code>%s</code> <b>tidak ditemukan</b> di master desa. Bila tetap diimpor, '
+				. 'sistem akan mencatatnya sebagai <b>desa baru di luar peta</b>.</p>',
+				esc_html( $cari )
+			);
+
+			$saran = PBM_Desa::saran( $cari, $kec, 5, 0.5 );
+			if ( $saran ) {
+				echo '<p>Paling mendekati:</p><ul>';
+				foreach ( $saran as $s ) {
+					printf(
+						'<li><b>%s</b> — %s <span class="pbm-tag pbm-tag-cek">%d%% mirip</span></li>',
+						esc_html( $s->desa->nama ),
+						esc_html( $s->desa->kecamatan ),
+						(int) round( $s->skor * 100 )
+					);
+				}
+				echo '</ul>';
+			} else {
+				echo '<p>Tidak ada nama di peta yang mendekati — kemungkinan memang desa baru, '
+					. 'bukan salah eja.</p>';
+			}
+			echo '<p class="pbm-muted">Periksa kembali ejaan di Excel, lalu unggah ulang agar pratinjau bersih.</p>';
+			echo '</div>';
+			return;
+		}
+
+		$d      = PBM_Desa::find( $hasil['kode'] );
+		$ada    = PBM_Desa::SUMBER_PETA === ( $d->sumber ?? PBM_Desa::SUMBER_PETA );
+		$n      = self::hitung_laporan()[ $d->kode ] ?? 0;
+		$tag    = $ada ? 'pbm-tag-ok' : 'pbm-tag-warn';
+		$label  = $ada ? 'bawaan peta' : 'ditambah lewat impor';
+
+		echo '<div class="pbm-cek pbm-cek-ok">';
+		printf(
+			'<p><code>%s</code> — %s</p>',
+			esc_html( $d->nama ),
+			esc_html( $d->kecamatan )
+		);
+		echo '<p><span class="pbm-tag ' . $tag . '">' . esc_html( $label ) . '</span> ';
+		echo '<span class="pbm-tag pbm-tag-dup">' . (int) $n . ' laporan</span> ';
+		echo '<span class="pbm-muted">kode ' . esc_html( $d->kode ) . '</span></p>';
+
+		if ( $ada ) {
+			echo '<p class="pbm-muted">Nama aman dipakai — impor tidak akan menambahkan desa baru.</p>';
+		} else {
+			echo '<p>Desa ini <b>bukan bagian dari peta</b>, jadi tidak akan tampil di peta choropleth. '
+				. 'Bila seharusnya ada di peta, perbaiki ejaannya di Excel.</p>';
+		}
+
+		/* Kecocokan otomatis yang kurang meyakinkan tetap dilaporkan. */
+		if ( 'persis' !== $metode ) {
+			printf(
+				'<p class="pbm-muted">Dicocokkan dengan metode <b>%s</b>%s — periksa kembali bila ragu.</p>',
+				esc_html( self::label_metode( $metode ) ),
+				( null !== $skor ) ? sprintf( ' (%d%% mirip)', (int) round( $skor * 100 ) ) : ''
+			);
+		}
+		echo '</div>';
+	}
+
+	/** Tabel seluruh desa terdaftar, dengan pencarian dan filter. */
+	private static function tabel_master_desa() {
+		$q       = sanitize_text_field( wp_unslash( $_GET['q'] ?? '' ) );
+		$kec     = sanitize_text_field( wp_unslash( $_GET['kec'] ?? '' ) );
+		$sumber  = sanitize_text_field( wp_unslash( $_GET['sumber'] ?? '' ) );
+		$perbaiki = sanitize_text_field( wp_unslash( $_GET['perbaiki'] ?? '' ) );
+
+		/* Sumber & jumlah laporan adalah kolom turunan, jadi disaring di sini. */
+		$boleh = array( 'kode', 'nama', 'kecamatan', 'sumber', 'laporan' );
+		$urut  = self::urut_aktif( $boleh, 'kecamatan' );
+		$arah  = self::arah_aktif( $urut );
+
+		echo '<h2>Seluruh desa terdaftar <span class="pbm-count">' . PBM_Desa::count() . '</span></h2>';
+
+		if ( '' !== $perbaiki ) {
+			self::panel_perbaikan( $perbaiki );
+		}
+
+		$semua = PBM_Desa::all( $kec, $sumber );
+		if ( '' !== $q ) {
+			$semua = array_values(
+				array_filter(
+					$semua,
+					static function ( $d ) use ( $q ) {
+						return false !== stripos( $d->nama, $q )
+							|| false !== stripos( $d->kecamatan, $q )
+							|| 0 === stripos( $d->kode, $q );
+					}
+				)
+			);
+		}
+
+		$lapor = self::hitung_laporan();
+
+		/* Sortir di PHP: seluruh master sudah termuat, tak perlu query lagi. */
+		usort(
+			$semua,
+			static function ( $a, $b ) use ( $urut, $arah, $lapor ) {
+				if ( 'laporan' === $urut ) {
+					$hasil = ( $lapor[ $a->kode ] ?? 0 ) <=> ( $lapor[ $b->kode ] ?? 0 );
+				} else {
+					$hasil = strcasecmp( (string) ( $a->$urut ?? '' ), (string) ( $b->$urut ?? '' ) );
+				}
+				/* Baris kembar disusun tetap: kecamatan lalu nama. */
+				if ( 0 === $hasil ) {
+					$hasil = strcasecmp( $a->kecamatan, $b->kecamatan ) ?: strcasecmp( $a->nama, $b->nama );
+				}
+				return 'turun' === $arah ? -$hasil : $hasil;
+			}
+		);
+
+		echo '<form method="get" class="pbm-filter-form">';
+		echo '<input type="hidden" name="page" value="pbm-desa">';
+		self::input_urut_tersembunyi( $urut, $arah );
+		echo '<input type="search" name="q" value="' . esc_attr( $q ) . '" placeholder="Cari nama / kode desa">';
+		echo '<select name="kec"><option value="">Semua kecamatan</option>';
+		foreach ( PBM_Desa::kecamatan_list() as $k ) {
+			echo '<option value="' . esc_attr( $k ) . '"' . selected( $kec, $k, false ) . '>'
+				. esc_html( $k ) . '</option>';
+		}
+		echo '</select>';
+		echo '<select name="sumber"><option value="">Semua sumber</option>';
+		echo '<option value="' . esc_attr( PBM_Desa::SUMBER_PETA ) . '"' . selected( $sumber, 'peta', false ) . '>Bawaan peta</option>';
+		echo '<option value="' . esc_attr( PBM_Desa::SUMBER_IMPOR ) . '"' . selected( $sumber, 'impor', false ) . '>Ditambah impor</option>';
+		echo '</select>';
+		echo '<button class="button">Terapkan</button>';
+		echo '</form>';
+
+		echo '<div class="pbm-scroll"><table class="widefat striped pbm-table"><thead><tr>';
+		$label = array(
+			'kode'      => 'Kode',
+			'nama'      => 'Desa',
+			'kecamatan' => 'Kecamatan',
+			'sumber'    => 'Sumber',
+			'laporan'   => 'Laporan',
+		);
+		foreach ( $label as $k => $t ) {
+			self::th_urut( $k, $t, $urut, $arah, 'naik' );
+		}
+		self::th_biasa( 'Aksi' );
+		echo '</tr></thead><tbody>';
+
+		if ( ! $semua ) {
+			echo '<tr><td colspan="6" class="pbm-muted">Tidak ada desa yang cocok dengan filter.</td></tr>';
+		}
+
+		foreach ( $semua as $d ) {
+			$impor = PBM_Desa::SUMBER_IMPOR === ( $d->sumber ?? PBM_Desa::SUMBER_PETA );
+			$n     = $lapor[ $d->kode ] ?? 0;
+
+			echo '<tr>';
+			echo '<td><span class="pbm-muted">' . esc_html( $d->kode ) . '</span></td>';
+			echo '<td><b>' . esc_html( $d->nama ) . '</b></td>';
+			echo '<td>' . esc_html( $d->kecamatan ) . '</td>';
+			echo '<td>' . ( $impor
+				? '<span class="pbm-tag pbm-tag-warn">ditambah impor</span>'
+				: '<span class="pbm-tag pbm-tag-ok">bawaan peta</span>' ) . '</td>';
+			echo '<td>' . ( $n ? (int) $n : '<span class="pbm-muted">0</span>' ) . '</td>';
+			echo '<td>';
+			if ( $impor ) {
+				if ( $n > 0 ) {
+					printf(
+						'<a class="button button-small" href="%s">Perbaiki &amp; hapus</a>',
+						esc_url( admin_url( 'admin.php?page=pbm-desa&perbaiki=' . rawurlencode( $d->kode ) ) )
+					);
+				} else {
+					self::form_hapus_desa( $d, 0 );
+				}
+			} else {
+				echo '<span class="pbm-muted">tidak bisa dihapus</span>';
+			}
+			echo '</td>';
+			echo '</tr>';
+		}
+		echo '</tbody></table></div>';
+	}
+
+	/** Panel pemindahan laporan satu desa impor ke desa peta. */
+	private static function panel_perbaikan( $kode ) {
+		$d = PBM_Desa::find( $kode );
+		if ( ! $d || PBM_Desa::SUMBER_PETA === ( $d->sumber ?? PBM_Desa::SUMBER_PETA ) ) {
+			return;
+		}
+		$n = self::hitung_laporan()[ $d->kode ] ?? 0;
+
+		echo '<div class="pbm-box pbm-box-warn">';
+		printf(
+			'<p><b>Perbaiki:</b> <code>%s</code> (%s) — kode %s, mempunyai <b>%d laporan</b>.</p>',
+			esc_html( $d->nama ),
+			esc_html( $d->kecamatan ),
+			esc_html( $d->kode ),
+			$n
+		);
+		echo '<p>Pindahkan laporannya ke desa bawaan peta yang benar, lalu desa ini dihapus. '
+			. 'Desa bawaan peta tetap ada karena menjadi acuan gambar polygon.</p>';
+		self::form_hapus_desa( $d, $n );
+		echo '</div>';
+	}
+
+	/** Proses hapus desa impor, dengan pemindahan laporan bila ada. */
+	public static function hapus_desa() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Akses ditolak.' );
+		}
+
+		$kode = sanitize_text_field( wp_unslash( $_POST['kode'] ?? '' ) );
+		check_admin_referer( 'pbm_hapus_desa_' . $kode );
+
+		$balik = admin_url( 'admin.php?page=pbm-desa' );
+		$d     = PBM_Desa::find( $kode );
+
+		if ( ! $d || PBM_Desa::SUMBER_PETA === ( $d->sumber ?? PBM_Desa::SUMBER_PETA ) ) {
+			wp_safe_redirect( $balik . '&pbm_notice=desa_gagal' );
+			exit;
+		}
+
+		$pindah = sanitize_text_field( wp_unslash( $_POST['pindah_ke'] ?? '' ) );
+		$n_lama = self::hitung_laporan()[ $kode ] ?? 0;
+
+		/* Jangan sampai ada laporan yang yatim. */
+		if ( $n_lama > 0 && '' === $pindah ) {
+			wp_safe_redirect( $balik . '&pbm_notice=desa_punya_laporan&perbaiki=' . rawurlencode( $kode ) );
+			exit;
+		}
+
+		$n = 0;
+		if ( '' !== $pindah ) {
+			$tujuan = PBM_Desa::find( $pindah );
+			if ( ! $tujuan || PBM_Desa::SUMBER_PETA !== ( $tujuan->sumber ?? PBM_Desa::SUMBER_PETA ) ) {
+				wp_safe_redirect( $balik . '&pbm_notice=desa_tujuan&perbaiki=' . rawurlencode( $kode ) );
+				exit;
+			}
+			$n = PBM_Desa::pindahkan_laporan( $kode, $pindah );
+		}
+
+		if ( ! PBM_Desa::hapus_impor( $kode ) ) {
+			wp_safe_redirect( $balik . '&pbm_notice=desa_gagal' );
+			exit;
+		}
+
+		wp_safe_redirect( $balik . '&pbm_notice=desa_dihapus&pindah=' . $n );
+		exit;
+	}
 
 	public static function halaman_import() {
 		if ( ! current_user_can( 'manage_options' ) ) {
@@ -354,25 +929,110 @@ class PBM_Admin {
 		echo '</div>';
 	}
 
+	/**
+	 * Metode pencocokan desa satu baris hasil.
+	 *
+	 * @return string|null null bila desa tidak ditemukan di peta.
+	 */
+	private static function metode_baris( $h ) {
+		if ( isset( $h['_metode'] ) ) {
+			return $h['_metode'];
+		}
+		/* Pratinjau lama, dibuat sebelum kolom _metode tersedia. */
+		return ( 'baru' === ( $h['_match'] ?? '' ) ) ? null : 'persis';
+	}
+
+	/**
+	 * Apakah metode ini perlu diperiksa petugas?
+	 *
+	 * persis dan alias dianggap aman (nama persis ada di peta, atau salah
+	 * eja yang sudah terdaftar di tabel alias). Metode lain hasil pencocokan
+	 * otomatis yang bisa salah, jadi dilaporkan bukan disembunyikan.
+	 */
+	private static function metode_perlu_tinjau( $metode ) {
+		return ! in_array( $metode, array( 'persis', 'alias' ), true );
+	}
+
+	/** Keterangan singkat untuk tiap metode pencocokan. */
+	private static function label_metode( $metode, $skor = 0 ) {
+		switch ( $metode ) {
+			case 'persis':
+				return '';
+			case 'alias':
+				return 'alias dikenal';
+			case 'alias_kecamatan':
+				return 'ejaan kecamatan diperbaiki';
+			case 'lintas_kecamatan':
+				return 'desa ada di kecamatan lain';
+			case 'mirip':
+				return sprintf( 'kemungkinan salah eja (%d%%)', (int) round( (float) $skor * 100 ) );
+			case 'mirip_lintas':
+				return sprintf( 'salah eja, lintas kecamatan (%d%%)', (int) round( (float) $skor * 100 ) );
+		}
+		return 'tidak ditemukan di peta';
+	}
+
+	/** Nama hasil pencocokan, disertai nama asli dari Excel bila berbeda. */
+	private static function tampil_nama( $hasil_kolom, $asli_kolom, $h ) {
+		$res  = (string) ( $h[ $hasil_kolom ] ?? '' );
+		$asli = trim( (string) ( $h[ $asli_kolom ] ?? '' ) );
+		$out  = esc_html( $res );
+		if ( '' !== $asli && 0 !== strcasecmp( $asli, trim( $res ) ) ) {
+			$out .= ' <span class="pbm-muted">(Excel: ' . esc_html( $asli ) . ')</span>';
+		}
+		return $out;
+	}
+
 	private static function pratinjau( $data ) {
 		$hasil = $data['hasil'];
-		$n_baru = $n_dup = $n_luar = $n_tanpa_koord = 0;
+		$n_baru = $n_dup = $n_luar = $n_tinjau = $n_tanpa_koord = 0;
+
 		foreach ( $hasil as $h ) {
 			$h['_existing'] ? $n_dup++ : $n_baru++;
-			if ( 'baru' === $h['_match'] ) {
-				$n_luar++;
-			}
 			if ( '' === $h['lat'] || '' === $h['lon'] ) {
 				$n_tanpa_koord++;
+			}
+			$metode = self::metode_baris( $h );
+			if ( null === $metode ) {
+				$n_luar++;
+			} elseif ( self::metode_perlu_tinjau( $metode ) ) {
+				$n_tinjau++;
 			}
 		}
 
 		echo '<h2>2. Pratinjau <span class="pbm-count">' . count( $hasil ) . ' baris dari ' . esc_html( $data['file'] ) . '</span></h2>';
 		echo '<div class="pbm-cards">';
-		foreach ( array( 'Siap diimpor' => $n_baru, 'Duplikat dilewati' => $n_dup, 'Desa di luar peta' => $n_luar, 'Tanpa koordinat' => $n_tanpa_koord ) as $label => $n ) {
-			echo '<div class="pbm-card"><span class="pbm-card-n">' . esc_html( $n ) . '</span><span class="pbm-card-l">' . esc_html( $label ) . '</span></div>';
+		$kartu = array(
+			/* label => [jumlah, kelas tambahan bila perlu ditonjolkan] */
+			'Siap diimpor'      => array( $n_baru, '' ),
+			'Duplikat dilewati' => array( $n_dup, '' ),
+			'Perlu dicek'       => array( $n_tinjau, $n_tinjau ? ' pbm-card-hitung' : '' ),
+			'Desa di luar peta' => array( $n_luar, $n_luar ? ' pbm-card-hitung' : '' ),
+			'Tanpa koordinat'   => array( $n_tanpa_koord, '' ),
+		);
+		foreach ( $kartu as $label => $k ) {
+			printf(
+				'<div class="pbm-card%s"><span class="pbm-card-n">%d</span><span class="pbm-card-l">%s</span></div>',
+				esc_attr( $k[1] ),
+				(int) $k[0],
+				esc_html( $label )
+			);
 		}
 		echo '</div>';
+
+		if ( $n_tinjau + $n_luar > 0 ) {
+			echo '<div class="notice notice-warning"><p>';
+			printf(
+				'<b>%d baris</b> memakai nama desa yang tidak persis cocok dengan data peta: '
+				. '<b>%d</b> mirip dengan desa di peta (kemungkinan salah eja) dan <b>%d</b> tidak ditemukan sama sekali.',
+				$n_tinjau + $n_luar,
+				$n_tinjau,
+				$n_luar
+			);
+			echo '<br>Periksa kolom <i>Status</i> pada tabel di bawah. Nama hasil pencocokan otomatis ditampilkan '
+				. 'bersama nama asli dari Excel — perbaiki ejaan di Excel bila seharusnya cocok, '
+				. 'lalu unggah ulang agar pratinjau bersih.</p></div>';
+		}
 
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
 		echo '<input type="hidden" name="action" value="pbm_import_proses">';
@@ -390,15 +1050,21 @@ class PBM_Admin {
 			$status = $h['_existing']
 				? '<span class="pbm-tag pbm-tag-dup">duplikat</span>'
 				: '<span class="pbm-tag pbm-tag-ok">baru</span>';
-			if ( 'baru' === $h['_match'] ) {
+
+			$metode = self::metode_baris( $h );
+			if ( null === $metode ) {
 				$status .= ' <span class="pbm-tag pbm-tag-warn">desa di luar peta</span>';
+			} elseif ( 'persis' !== $metode ) {
+				$status .= ' <span class="pbm-tag pbm-tag-cek">'
+					. esc_html( self::label_metode( $metode, $h['_skor'] ?? 0 ) ) . '</span>';
 			}
+
 			echo '<tr>';
 			echo '<td>' . esc_html( $h['_excel_row'] ) . '</td>';
 			echo '<td>' . esc_html( $h['no'] ) . '</td>';
 			echo '<td>' . esc_html( $h['_bencana'] ) . '</td>';
-			echo '<td>' . esc_html( $h['_desa'] ) . '</td>';
-			echo '<td>' . esc_html( $h['_kecamatan'] ) . '</td>';
+			echo '<td>' . self::tampil_nama( '_desa', '_desa_excel', $h ) . '</td>';
+			echo '<td>' . self::tampil_nama( '_kecamatan', '_kec_excel', $h ) . '</td>';
 			echo '<td>' . esc_html( $h['waktu_laporan'] ?: '—' ) . '</td>';
 			echo '<td>' . ( '' === $h['lat'] ? '<span class="pbm-muted">—</span>' : esc_html( $h['lat'] ) ) . '</td>';
 			echo '<td>' . ( '' === $h['lon'] ? '<span class="pbm-muted">—</span>' : esc_html( $h['lon'] ) ) . '</td>';
